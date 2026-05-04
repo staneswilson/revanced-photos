@@ -72,17 +72,23 @@ async function main() {
 
     const cliPath = path.join(CONFIG.paths.toolsDir, release.cli.name);
     const patchesPath = path.join(CONFIG.paths.toolsDir, release.patches.name);
-    const integrationsPath = path.join(CONFIG.paths.toolsDir, release.integrations.name);
+    const integrationsPath = release.integrations
+      ? path.join(CONFIG.paths.toolsDir, release.integrations.name)
+      : null;
 
     // Step 3 — Download ReVanced tools
     await downloadFile(release.cli.downloadUrl, cliPath, 'revanced-cli');
     await downloadFile(release.patches.downloadUrl, patchesPath, 'revanced-patches');
-    await downloadFile(release.integrations.downloadUrl, integrationsPath, 'revanced-integrations');
+    if (release.integrations && integrationsPath) {
+      await downloadFile(release.integrations.downloadUrl, integrationsPath, 'revanced-integrations');
+    }
 
     // Step 4 — Verify all tool checksums
     await verifySha256(cliPath, release.cli.sha256);
     await verifySha256(patchesPath, release.patches.sha256);
-    await verifySha256(integrationsPath, release.integrations.sha256);
+    if (release.integrations && integrationsPath) {
+      await verifySha256(integrationsPath, release.integrations.sha256);
+    }
     logger.info('[orchestrator] All tool checksums verified');
 
     // Step 5 — Fetch base APK
@@ -140,7 +146,7 @@ async function main() {
         gphotosVersion: apkResult.version,
         revancedCliVersion: release.cli.name,
         revancedPatchesVersion: release.patches.name,
-        revancedIntegrationsVersion: release.integrations.name,
+        revancedIntegrationsVersion: release.integrations?.name ?? 'n/a (CLI v6+)',
         appliedPatches: patchConfig.appliedPatches.map((p: any) => p.name),
         signedApkSha256,
         magiskZipSha256

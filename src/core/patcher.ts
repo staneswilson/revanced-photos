@@ -14,7 +14,7 @@ export interface PatcherOptions {
   outputApkPath: string;
   cliJarPath: string;
   patchesJarPath: string;
-  integrationsApkPath: string;
+  integrationsApkPath?: string | null;  // Optional — removed in CLI v6+
   patchConfig: ResolvedPatchConfig;
 }
 
@@ -23,7 +23,7 @@ export async function runPatcher(options: PatcherOptions): Promise<void> {
     '-jar', options.cliJarPath,
     'patch',
     '--patch-bundle', options.patchesJarPath,
-    '--merge', options.integrationsApkPath,
+    ...(options.integrationsApkPath ? ['--merge', options.integrationsApkPath] : []),
     '--options', options.patchConfig.optionsPath,
     ...options.patchConfig.includeFlags,
     '--out', options.outputApkPath,

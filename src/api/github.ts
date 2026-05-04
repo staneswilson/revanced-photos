@@ -11,12 +11,15 @@ export interface ReVancedRelease {
   tag: string;
   cli: ReleaseAsset;
   patches: ReleaseAsset;
-  integrations: ReleaseAsset;
+  /** integrations is optional — removed in CLI v6+ */
+  integrations: ReleaseAsset | null;
 }
 
 const GithubAssetSchema = z.object({
   name: z.string(),
   browser_download_url: z.string().url(),
+  // CLI v6+ embeds sha256 as "sha256:<hex>" in the digest field
+  digest: z.string().optional().nullable(),
 });
 
 const GithubReleaseSchema = z.object({
@@ -46,57 +49,144 @@ async function fetchWithRetry(url: string, init?: RequestInit): Promise<Response
   throw lastError instanceof Error ? lastError : new Error(String(lastError || 'Unknown error'));
 }
 
-export async function fetchLatestReVancedRelease(org: string, repo: string): Promise<ReVancedRelease> {
+function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github.v3+json',
     'User-Agent': 'photos-revanced-pipeline',
   };
-
   if (process.env.GITHUB_TOKEN) {
     headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
   } else {
     logger.warn('[github] GITHUB_TOKEN not found in env. Rate limits may apply.');
   }
+  return headers;
+}
 
-  const response = await fetchWithRetry(`https://api.github.com/repos/${org}/${repo}/releases/latest`, { headers });
+async function fetchRelease(org: string, repo: string) {
+  const headers = buildHeaders();
+  const url = `https://api.github.com/repos/${org}/${repo}/releases/latest`;
+  const response = await fetchWithRetry(url, { headers });
   if (!response.ok) {
     throw new Error(`Failed to fetch release for ${repo}: HTTP ${response.status}`);
   }
-
   const data = await response.json();
-  const release = GithubReleaseSchema.parse(data);
+  return GithubReleaseSchema.parse(data);
+}
 
-  const checksumsAsset = release.assets.find((a) => a.name === 'checksums.txt' || a.name.endsWith('.sha256'));
-  if (!checksumsAsset) {
-    throw new Error(`No checksums file found in ${repo} release ${release.tag_name}`);
+/**
+ * Extracts SHA-256 from an asset.
+ * Tries the `digest` field first (CLI v6+: "sha256:<hex>"),
+ * then falls back to a sibling `.sha256` asset,
+ * then falls back to a `checksums.txt` asset.
+ */
+async function resolveAsset(
+  assetNamePrefix: string,
+  assets: z.infer<typeof GithubReleaseSchema>['assets'],
+  fetchFallbackChecksums?: () => Promise<Map<string, string>>,
+): Promise<ReleaseAsset> {
+  const asset = assets.find(
+    (a) =>
+      a.name.startsWith(assetNamePrefix) &&
+      !a.name.endsWith('.sha256') &&
+      !a.name.endsWith('.asc') &&
+      !a.name.endsWith('.txt'),
+  );
+  if (!asset) throw new Error(`Asset with prefix "${assetNamePrefix}" not found in release`);
+
+  // Strategy 1: digest field (CLI v6+)
+  if (asset.digest && asset.digest.startsWith('sha256:')) {
+    const sha256 = asset.digest.slice('sha256:'.length);
+    logger.info(`[github] Using digest field for ${asset.name}: ${sha256.slice(0, 16)}...`);
+    return { name: asset.name, downloadUrl: asset.browser_download_url, sha256 };
   }
 
-  const checksumsResponse = await fetchWithRetry(checksumsAsset.browser_download_url);
-  if (!checksumsResponse.ok) {
-    throw new Error(`Failed to fetch checksums for ${repo}: HTTP ${checksumsResponse.status}`);
+  // Strategy 2: sibling .sha256 file
+  const sha256Asset = assets.find((a) => a.name === `${asset.name}.sha256`);
+  if (sha256Asset) {
+    const resp = await fetchWithRetry(sha256Asset.browser_download_url);
+    const sha256 = (await resp.text()).trim().split(/\s+/)[0]!;
+    logger.info(`[github] Using .sha256 sidecar for ${asset.name}`);
+    return { name: asset.name, downloadUrl: asset.browser_download_url, sha256 };
   }
 
-  const checksumsText = await checksumsResponse.text();
-  const checksumMap = new Map<string, string>();
-  for (const line of checksumsText.split('\n')) {
-    const parts = line.trim().split(/\s+/);
-    if (parts.length >= 2) {
-      checksumMap.set(parts[1]!, parts[0]!); // format: hash filename
+  // Strategy 3: checksums.txt
+  if (fetchFallbackChecksums) {
+    const map = await fetchFallbackChecksums();
+    const sha256 = map.get(asset.name);
+    if (sha256) {
+      logger.info(`[github] Using checksums.txt for ${asset.name}`);
+      return { name: asset.name, downloadUrl: asset.browser_download_url, sha256 };
     }
   }
 
-  const getAsset = (prefix: string): ReleaseAsset => {
-    const asset = release.assets.find((a) => a.name.startsWith(prefix) && !a.name.endsWith('.sha256') && !a.name.endsWith('.txt'));
-    if (!asset) throw new Error(`Asset starting with ${prefix} not found`);
-    const sha256 = checksumMap.get(asset.name);
-    if (!sha256) throw new Error(`SHA256 for ${asset.name} not found in checksums`);
-    return { name: asset.name, downloadUrl: asset.browser_download_url, sha256 };
-  };
+  throw new Error(`Could not resolve SHA-256 for ${asset.name}`);
+}
 
-  return {
-    tag: release.tag_name,
-    cli: getAsset('revanced-cli'),
-    patches: getAsset('revanced-patches'), // Note: can be .jar or .rvp depending on version, handled by prefix
-    integrations: getAsset('revanced-integrations'),
-  };
+export async function fetchLatestReVancedRelease(org: string, repo: string): Promise<ReVancedRelease> {
+  // CLI v6 ships everything in one repo: revanced-cli
+  // Patches are now `.rvp` bundles from revanced-patches (separate repo, same pattern)
+  logger.info(`[github] Fetching CLI release from ${org}/${repo}...`);
+  const cliRelease = await fetchRelease(org, 'revanced-cli');
+
+  // Build optional checksums.txt fallback
+  const checksumsAsset = cliRelease.assets.find(
+    (a) => a.name === 'checksums.txt' || a.name.endsWith('.sha256sum'),
+  );
+  let checksumsMap: Map<string, string> | null = null;
+  const fetchFallback = checksumsAsset
+    ? async () => {
+        if (checksumsMap) return checksumsMap;
+        const resp = await fetchWithRetry(checksumsAsset.browser_download_url);
+        const text = await resp.text();
+        checksumsMap = new Map<string, string>();
+        for (const line of text.split('\n')) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 2) checksumsMap.set(parts[1]!, parts[0]!);
+        }
+        return checksumsMap;
+      }
+    : undefined;
+
+  const cli = await resolveAsset('revanced-cli', cliRelease.assets, fetchFallback);
+
+  // Patches — try fetching from revanced-patches repo
+  let patches: ReleaseAsset;
+  try {
+    logger.info(`[github] Fetching patches release from ${org}/revanced-patches...`);
+    const patchesRelease = await fetchRelease(org, 'revanced-patches');
+    const patchChecksumsAsset = patchesRelease.assets.find(
+      (a) => a.name === 'checksums.txt' || a.name.endsWith('.sha256sum'),
+    );
+    const fetchPatchFallback = patchChecksumsAsset
+      ? async () => {
+          const resp = await fetchWithRetry(patchChecksumsAsset.browser_download_url);
+          const text = await resp.text();
+          const map = new Map<string, string>();
+          for (const line of text.split('\n')) {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 2) map.set(parts[1]!, parts[0]!);
+          }
+          return map;
+        }
+      : undefined;
+    patches = await resolveAsset('revanced-patches', patchesRelease.assets, fetchPatchFallback);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`[github] Could not fetch patches from revanced-patches repo: ${msg}`);
+    logger.warn(`[github] Falling back to patches bundled with CLI release (if any)`);
+    patches = await resolveAsset('revanced-patches', cliRelease.assets, fetchFallback);
+  }
+
+  // Integrations — optional (removed in CLI v6+)
+  let integrations: ReleaseAsset | null = null;
+  try {
+    const integrationsRelease = await fetchRelease(org, 'revanced-integrations');
+    integrations = await resolveAsset('revanced-integrations', integrationsRelease.assets);
+    logger.info(`[github] Integrations: ${integrations.name}`);
+  } catch {
+    logger.info(`[github] No integrations found (expected for CLI v6+, skipping)`);
+  }
+
+  logger.info(`[github] CLI: ${cli.name} | Patches: ${patches.name}`);
+  return { tag: cliRelease.tag_name, cli, patches, integrations };
 }
