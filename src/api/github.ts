@@ -181,7 +181,23 @@ export async function fetchLatestReVancedRelease(org: string, repo: string): Pro
   let integrations: ReleaseAsset | null = null;
   try {
     const integrationsRelease = await fetchRelease(org, 'revanced-integrations');
-    integrations = await resolveAsset('revanced-integrations', integrationsRelease.assets);
+    const integrationChecksumsAsset = integrationsRelease.assets.find(
+      (a) => a.name === 'checksums.txt' || a.name.endsWith('.sha256sum'),
+    );
+    const fetchIntegrationFallback = integrationChecksumsAsset
+      ? async () => {
+          const resp = await fetchWithRetry(integrationChecksumsAsset.browser_download_url);
+          const text = await resp.text();
+          const map = new Map<string, string>();
+          for (const line of text.split('\n')) {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 2) map.set(parts[1]!, parts[0]!);
+          }
+          return map;
+        }
+      : undefined;
+
+    integrations = await resolveAsset('revanced-integrations', integrationsRelease.assets, fetchIntegrationFallback);
     logger.info(`[github] Integrations: ${integrations.name}`);
   } catch {
     logger.info(`[github] No integrations found (expected for CLI v6+, skipping)`);
