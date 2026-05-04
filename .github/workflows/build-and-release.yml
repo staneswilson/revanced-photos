@@ -23,10 +23,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@v4
         with: { fetch-depth: 1 }
 
-      - uses: actions/setup-java@387ac29b308d003ea37ba93dd8fac8c911b6201b # v3.13.0
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -39,16 +39,16 @@ jobs:
       - name: Install apkeep
         run: |
           APKEEP_VERSION="0.17.0"
-          APKEEP_SHA256="05c2ea04b3211568285bd5e27a695b28292850cd3e414f6b412b1d31c1f4e1f7"
+          APKEEP_SHA256="61f6b4138e381f4fd8e05e386db13760c7fbcc8ceaa2c366c1ad9c6de4e6b6ab"
           curl -fsSL -o apkeep "https://github.com/EFForg/apkeep/releases/download/${APKEEP_VERSION}/apkeep-x86_64-unknown-linux-gnu"
           echo "${APKEEP_SHA256}  apkeep" | sha256sum -c - || exit 1
           chmod +x apkeep
           sudo mv apkeep /usr/local/bin/apkeep
 
-      - uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
+      - uses: pnpm/action-setup@v4
         with: { version: 9 }
 
-      - uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4.0.2
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -67,7 +67,8 @@ jobs:
           KEY_PASS:        ${{ secrets.KEY_PASS }}
         run: node dist/index.js
 
-      - uses: actions/upload-artifact@c7d193f32edcb7bfad88892161225aeda64e9392 # v4.0.0
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: revanced-gphotos-${{ github.run_number }}
           path: |
@@ -81,7 +82,7 @@ jobs:
           TAG=$(node -e "import('./workspace/meta.json', {assert:{type:'json'}}).then(m => console.log(m.default.releaseTag))")
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
 
-      - uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191 # v2.0.4
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           body_path: workspace/release-notes.md

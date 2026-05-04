@@ -13,12 +13,12 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@v4
 
       - name: Install apkeep
         run: |
           APKEEP_VERSION="0.17.0"
-          APKEEP_SHA256="05c2ea04b3211568285bd5e27a695b28292850cd3e414f6b412b1d31c1f4e1f7"
+          APKEEP_SHA256="61f6b4138e381f4fd8e05e386db13760c7fbcc8ceaa2c366c1ad9c6de4e6b6ab"
           curl -fsSL -o apkeep "https://github.com/EFForg/apkeep/releases/download/${APKEEP_VERSION}/apkeep-x86_64-unknown-linux-gnu"
           echo "${APKEEP_SHA256}  apkeep" | sha256sum -c - || exit 1
           chmod +x apkeep
@@ -53,7 +53,7 @@ jobs:
 
       - name: Create Pull Request
         if: steps.compare.outputs.has_update == 'true'
-        uses: peter-evans/create-pull-request@b1ddad2c994a25fbc81a28b3ec0e368bb2021c50 # v6.0.0
+        uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore: bump Google Photos to ${{ steps.fetch-version.outputs.LATEST_VERSION }}"
