@@ -1,0 +1,3 @@
+hash_cli  revanced-cli-1.0.0.jar
+hash_patches  revanced-patches-1.0.0.rvp
+hash_integrations  revanced-integrations-1.0.0.apk

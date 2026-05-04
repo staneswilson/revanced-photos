@@ -1,0 +1,7 @@
+node_modules/
+dist/
+workspace/
+.env
+*.keystore
+*.jks
+*.b64

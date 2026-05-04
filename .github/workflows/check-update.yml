@@ -1,0 +1,65 @@
+name: Check for Google Photos Updates
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Monday at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Install apkeep
+        run: |
+          APKEEP_VERSION="0.17.0"
+          APKEEP_SHA256="05c2ea04b3211568285bd5e27a695b28292850cd3e414f6b412b1d31c1f4e1f7"
+          curl -fsSL -o apkeep "https://github.com/EFForg/apkeep/releases/download/${APKEEP_VERSION}/apkeep-x86_64-unknown-linux-gnu"
+          echo "${APKEEP_SHA256}  apkeep" | sha256sum -c - || exit 1
+          chmod +x apkeep
+          sudo mv apkeep /usr/local/bin/apkeep
+
+      - name: Fetch Latest Version from APKPure
+        id: fetch-version
+        run: |
+          # Use apkeep to get the latest version string
+          # Example output parsing: "Downloading com.google.android.apps.photos 6.91.0"
+          LATEST_VERSION=$(apkeep -a com.google.android.apps.photos -d apkpure -l | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | head -n 1 || echo "")
+          if [ -z "$LATEST_VERSION" ]; then
+             echo "Failed to fetch version"
+             exit 1
+          fi
+          echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check against pinned version
+        id: compare
+        run: |
+          PINNED=$(jq -r '.gphotos.version' config/versions.json)
+          LATEST="${{ steps.fetch-version.outputs.LATEST_VERSION }}"
+          
+          if [ "$PINNED" != "$LATEST" ]; then
+             echo "New version found: $LATEST (was $PINNED)"
+             jq ".gphotos.version = \"$LATEST\" | .gphotos.updatedAt = \"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\"" config/versions.json > temp.json && mv temp.json config/versions.json
+             echo "has_update=true" >> $GITHUB_OUTPUT
+          else
+             echo "No update needed. Pinned version $PINNED is still latest."
+             echo "has_update=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.compare.outputs.has_update == 'true'
+        uses: peter-evans/create-pull-request@b1ddad2c994a25fbc81a28b3ec0e368bb2021c50 # v6.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: bump Google Photos to ${{ steps.fetch-version.outputs.LATEST_VERSION }}"
+          title: "chore: bump Google Photos to ${{ steps.fetch-version.outputs.LATEST_VERSION }}"
+          body: |
+            Automated version bump for Google Photos.
+            New version: `${{ steps.fetch-version.outputs.LATEST_VERSION }}`
+          branch: "update-gphotos-${{ steps.fetch-version.outputs.LATEST_VERSION }}"
+          delete-branch: true
