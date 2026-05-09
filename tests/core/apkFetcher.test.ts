@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fetchGPhotosApk, ApkFetchError } from '../../src/core/apkFetcher.js';
 import * as child_process from 'child_process';
 
@@ -23,6 +23,12 @@ vi.mock('fs/promises', () => ({
 }));
 
 describe('apkFetcher', () => {
+  beforeEach(() => {
+    // Reset call history between tests so toHaveBeenNthCalledWith uses
+    // per-test indices, not absolute indices across the suite.
+    vi.mocked(child_process.execFile).mockClear();
+  });
+
   it('should call execFile with correct apkeep args and parse version', async () => {
     const result = await fetchGPhotosApk('/tmp/input.apk');
     expect(child_process.execFile).toHaveBeenCalledWith(
@@ -47,13 +53,48 @@ describe('apkFetcher', () => {
     delete process.env.GPHOTOS_VERSION;
   });
 
+  it('should resolve latest version via apkeep -l and use it as the pin when none is set', async () => {
+    // First call = listing (run because no env var and no versions.json),
+    // second call = actual download with the resolved pin.
+    vi.mocked(child_process.execFile)
+      .mockImplementationOnce((cmd, args, options, callback: any) => {
+        callback(null, 'Versions available for com.google.android.apps.photos on APKPure:\n| 5.78.0.428376309, 7.21.0.737764319, 7.75.0.911466973\n', '');
+      })
+      .mockImplementationOnce((cmd, args, options, callback: any) => {
+        callback(null, 'Downloading com.google.android.apps.photos 7.75.0.911466973\nSuccess', '');
+      });
+
+    const result = await fetchGPhotosApk('/tmp/input3.apk');
+
+    expect(child_process.execFile).toHaveBeenNthCalledWith(
+      1,
+      'apkeep',
+      ['-l', '-a', 'com.google.android.apps.photos', '-d', 'apk-pure', '/tmp'],
+      expect.any(Object),
+      expect.any(Function),
+    );
+    expect(child_process.execFile).toHaveBeenNthCalledWith(
+      2,
+      'apkeep',
+      ['-a', 'com.google.android.apps.photos@7.75.0.911466973', '-d', 'apk-pure', '/tmp'],
+      expect.any(Object),
+      expect.any(Function),
+    );
+    expect(result.version).toBe('7.75.0.911466973');
+  });
+
   it('should throw ApkFetchError when apkeep fails', async () => {
-    // We can't easily mock the command args to trigger error with the current mock setup unless we change it.
-    // Let's redefine mock just for this test
+    // Set GPHOTOS_VERSION so we skip the listing step; then the queued error
+    // impl is consumed by the actual download call.
+    process.env.GPHOTOS_VERSION = '7.75.0.911466973';
     vi.mocked(child_process.execFile).mockImplementationOnce((cmd, args, options, callback: any) => {
       callback({ stderr: 'Mock apkeep error output' }, '', 'Mock apkeep error output');
     });
 
-    await expect(fetchGPhotosApk('/tmp/input.apk')).rejects.toThrowError(ApkFetchError);
+    try {
+      await expect(fetchGPhotosApk('/tmp/input.apk')).rejects.toThrowError(ApkFetchError);
+    } finally {
+      delete process.env.GPHOTOS_VERSION;
+    }
   });
 });

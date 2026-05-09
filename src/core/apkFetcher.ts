@@ -28,6 +28,35 @@ export interface ApkFetchResult {
   outputPath: string;
 }
 
+/**
+ * Queries apkeep for the version listing of the configured package and
+ * returns the latest 4-segment version. apkeep prints the listing in
+ * oldest→newest order on a single comma-separated line, so the last match is
+ * the most recent. Returns null on any failure (caller decides how to react).
+ */
+async function resolveLatestVersion(listingDir: string): Promise<string | null> {
+  logger.info(`[apkFetcher] No version pin set; querying APKPure for latest...`);
+  try {
+    const { stdout } = await execFileAsync('apkeep', [
+      '-l',
+      '-a', CONFIG.packageName,
+      '-d', 'apk-pure',
+      listingDir,
+    ]);
+    const matches = stdout.match(/\d+\.\d+\.\d+\.\d+/g);
+    if (!matches || matches.length === 0) {
+      logger.warn(`[apkFetcher] Could not parse version listing: ${stdout.substring(0, 300)}`);
+      return null;
+    }
+    const latest = matches[matches.length - 1]!;
+    logger.info(`[apkFetcher] Latest APKPure version: ${latest}`);
+    return latest;
+  } catch (err: any) {
+    logger.warn(`[apkFetcher] apkeep -l failed: ${err?.message || err}`);
+    return null;
+  }
+}
+
 export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResult> {
   let versionPin = process.env[CONFIG.envKeys.gphotosVersion];
 
@@ -47,8 +76,15 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
     logger.info(`[apkFetcher] Using pinned version ${versionPin} from env var`);
   }
 
-  const packageNameArg = versionPin ? `${CONFIG.packageName}@${versionPin}` : CONFIG.packageName;
   const outDir = path.dirname(outputPath);
+
+  // No pin → resolve the current latest before downloading so the version is
+  // known to the rest of the pipeline (release tag, meta.json, notes).
+  if (!versionPin) {
+    versionPin = (await resolveLatestVersion(outDir)) ?? undefined;
+  }
+
+  const packageNameArg = versionPin ? `${CONFIG.packageName}@${versionPin}` : CONFIG.packageName;
 
   const args = [
     '-a', packageNameArg,
@@ -62,13 +98,18 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
     // apkeep must be in PATH
     const { stdout, stderr } = await execFileAsync('apkeep', args);
 
-    const match = stdout.match(/Downloading .*? ([0-9.]+)/i);
+    // Prefer the explicit pin: the stdout regex `[0-9.]+` would truncate a
+    // 4-segment version (e.g. `7.75.0.911466973`) to the 3-segment marketing
+    // form if apkeep prints that variant.
     let version = versionPin || 'unknown';
-    if (match && match[1]) {
-      version = match[1];
-    } else {
-      logger.warn(`[apkFetcher] Could not parse version from apkeep stdout: ${stdout.substring(0, 200)}`);
-      if (stderr) logger.warn(`[apkFetcher] apkeep stderr: ${stderr.substring(0, 500)}`);
+    if (!versionPin) {
+      const match = stdout.match(/Downloading .*? ([0-9.]+)/i);
+      if (match && match[1]) {
+        version = match[1];
+      } else {
+        logger.warn(`[apkFetcher] Could not parse version from apkeep stdout: ${stdout.substring(0, 200)}`);
+        if (stderr) logger.warn(`[apkFetcher] apkeep stderr: ${stderr.substring(0, 500)}`);
+      }
     }
 
     // apkeep's output layout has changed across versions: older builds wrote
