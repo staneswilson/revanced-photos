@@ -8,13 +8,13 @@ This guide covers everything needed to run the pipeline **locally** (Windows) or
 
 Make sure the following tools are installed and available in your `PATH`:
 
-| Tool | Version | Install |
-|------|---------|---------|
-| Node.js | ≥ 20 | [nodejs.org](https://nodejs.org) |
-| pnpm | ≥ 8 | `npm i -g pnpm` |
-| Java (JDK) | ≥ 17 | [adoptium.net](https://adoptium.net) |
-| Android SDK Build-Tools | 34.x | via Android Studio SDK Manager |
-| apkeep | 0.17.0 | See below |
+| Tool                    | Version | Install                              |
+| ----------------------- | ------- | ------------------------------------ |
+| Node.js                 | ≥ 20    | [nodejs.org](https://nodejs.org)     |
+| pnpm                    | ≥ 8     | `npm i -g pnpm`                      |
+| Java (JDK)              | ≥ 17    | [adoptium.net](https://adoptium.net) |
+| Android SDK Build-Tools | 34.x    | via Android Studio SDK Manager       |
+| apkeep                  | 0.17.0  | See below                            |
 
 ### Install `apkeep` (Windows)
 
@@ -95,9 +95,12 @@ KEY_PASS=changeme
 # Optional
 # GPHOTOS_VERSION=7.75.0.911466973
 # SKIP_MAGISK=true
+# SKIP_ICON_RECOLOR=true
 ```
 
-> **About `GPHOTOS_VERSION`.** This is *optional*. When unset (and `config/versions.json` has an empty `gphotos.version`), the orchestrator runs `apkeep -l` first to read APKPure's current latest 4-segment version of `com.google.android.apps.photos` and uses it for the build. Pin a value here only if you want to lock to a specific Photos build — and use the full 4-segment APKPure version (e.g. `7.75.0.911466973`), not the 3-segment marketing version (`7.75.0`), which APKPure does not recognize as an exact match.
+> **About `GPHOTOS_VERSION`.** This is _optional_. When unset (and `config/versions.json` has an empty `gphotos.version`), the orchestrator runs `apkeep -l` first to read APKPure's current latest 4-segment version of `com.google.android.apps.photos` and uses it for the build. Pin a value here only if you want to lock to a specific Photos build — and use the full 4-segment APKPure version (e.g. `7.75.0.911466973`), not the 3-segment marketing version (`7.75.0`), which APKPure does not recognize as an exact match.
+
+> **About `SKIP_ICON_RECOLOR`.** By default the pipeline grayscales the launcher icon resources (`res/mipmap-*/ic_launcher*.{png,webp}` and `res/drawable-*/ic_launcher_foreground*`) so the patched app is visually distinct from stock Photos on the home screen. Set `SKIP_ICON_RECOLOR=true` to keep the stock colored icon. Per-icon failures during recolor are non-fatal (logged + counted) — the recolor step is purely cosmetic and never aborts the build.
 
 ### Generate a GitHub Personal Access Token (PAT)
 
@@ -119,6 +122,7 @@ pnpm run dev:run
 ```
 
 This will:
+
 1. Compile TypeScript to `dist/`
 2. Fetch the latest ReVanced CLI / Patches / Integrations from GitHub
 3. Verify all SHA-256 checksums
@@ -129,6 +133,7 @@ This will:
 8. Write `workspace/meta.json` and `workspace/release-notes.md`
 
 Outputs will be in the `workspace/` directory:
+
 - `workspace/output-signed.apk` — Install on non-root devices (with MicroG)
 - `workspace/magisk-revanced-gphotos.zip` — Flash in Magisk/KernelSU for root
 
@@ -139,12 +144,12 @@ Outputs will be in the `workspace/` directory:
 For automated weekly builds, add these to your repository:  
 **Settings → Secrets and variables → Actions → New repository secret**
 
-| Secret Name | Value |
-|-------------|-------|
+| Secret Name       | Value                      |
+| ----------------- | -------------------------- |
 | `KEYSTORE_BASE64` | Contents of `keystore.b64` |
-| `KEY_ALIAS` | `revanced` (or your alias) |
-| `KEY_STORE_PASS` | Your keystore password |
-| `KEY_PASS` | Your key password |
+| `KEY_ALIAS`       | `revanced` (or your alias) |
+| `KEY_STORE_PASS`  | Your keystore password     |
+| `KEY_PASS`        | Your key password          |
 
 > `GITHUB_TOKEN` is automatically injected by GitHub Actions — you do **not** need to add it manually.
 
@@ -155,14 +160,15 @@ Then trigger the pipeline manually:
 
 ## Troubleshooting
 
-| Error | Fix |
-|-------|-----|
-| `apksigner: command not found` | Add Android SDK build-tools to PATH |
-| `apkeep: command not found` | Install apkeep (Step 0) and ensure it is in PATH |
-| `invalid value 'apkpure' for '--download-source'` | apkeep ≥ 0.17.0 renamed the value to `apk-pure`. The pipeline already uses the new value; this only affects manual `apkeep` invocations. |
-| `apkeep produced no APK matching ...` (silent failure, exit 0, empty stdout) | Pinned `GPHOTOS_VERSION` doesn't exist on APKPure. Run `apkeep -l -a com.google.android.apps.photos -d apk-pure ./tmp` to list real versions, then either pin a 4-segment match or leave the pin empty (auto-resolves latest). |
-| `Missing required environment variables` | Check your `.env` file has all required keys |
-| `Missing required patch 'Spoof features'` or `'GmsCore support'` | ReVanced renamed these patches in v6 (capitalized, with spaces). Check [revanced-patches releases](https://github.com/ReVanced/revanced-patches/releases) for further drift. |
-| `Failed to fetch release for revanced-patches: HTTP 451` | Expected — the pipeline auto-falls back to `https://api.revanced.app/v5/patches`. Should not abort the build; if it does, check that your runner can reach `api.revanced.app`. |
-| `HTTP 403` from GitHub API | Your `GITHUB_TOKEN` is invalid or expired |
-| `Signature verification failed` | Keystore alias/password mismatch — regenerate with correct values |
+| Error                                                                        | Fix                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `apksigner: command not found`                                               | Add Android SDK build-tools to PATH                                                                                                                                                                                                                                                                          |
+| `apkeep: command not found`                                                  | Install apkeep (Step 0) and ensure it is in PATH                                                                                                                                                                                                                                                             |
+| `invalid value 'apkpure' for '--download-source'`                            | apkeep ≥ 0.17.0 renamed the value to `apk-pure`. The pipeline already uses the new value; this only affects manual `apkeep` invocations.                                                                                                                                                                     |
+| `apkeep produced no APK matching ...` (silent failure, exit 0, empty stdout) | Pinned `GPHOTOS_VERSION` doesn't exist on APKPure. Run `apkeep -l -a com.google.android.apps.photos -d apk-pure ./tmp` to list real versions, then either pin a 4-segment match or leave the pin empty (auto-resolves latest).                                                                               |
+| `Missing required environment variables`                                     | Check your `.env` file has all required keys                                                                                                                                                                                                                                                                 |
+| `Missing required patch 'Spoof features'` or `'GmsCore support'`             | ReVanced renamed these patches in v6 (capitalized, with spaces). Check [revanced-patches releases](https://github.com/ReVanced/revanced-patches/releases) for further drift.                                                                                                                                 |
+| `Failed to fetch release for revanced-patches: HTTP 451`                     | Expected — the pipeline auto-falls back to `https://api.revanced.app/v5/patches`. Should not abort the build; if it does, check that your runner can reach `api.revanced.app`.                                                                                                                               |
+| `[iconRecolor] No launcher icons were recolored`                             | Photos shifted its resource layout under `res/mipmap-*` or `res/drawable-*`. Cosmetic only — the build continues with the stock colored icon. Inspect the patched APK's `res/` tree (e.g. `unzip -l workspace/output-patched.apk \| grep ic_launcher`) and update the patterns in `src/core/iconRecolor.ts`. |
+| `HTTP 403` from GitHub API                                                   | Your `GITHUB_TOKEN` is invalid or expired                                                                                                                                                                                                                                                                    |
+| `Signature verification failed`                                              | Keystore alias/password mismatch — regenerate with correct values                                                                                                                                                                                                                                            |

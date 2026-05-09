@@ -20,10 +20,13 @@
     "prepare": "husky install"
   },
   "dependencies": {
+    "adm-zip": "^0.5.17",
     "archiver": "^7.0.1",
+    "sharp": "^0.34.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/archiver": "^7.0.0",
     "@types/node": "^25.6.0",
     "@typescript-eslint/eslint-plugin": "^8.59.1",
@@ -51,7 +54,8 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
-      "msw"
+      "msw",
+      "sharp"
     ]
   }
 }

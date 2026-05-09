@@ -14,6 +14,8 @@ The pipeline runs weekly, fetches the latest patch-compatible Google Photos APK 
 - `magisk-revanced-gphotos.zip` — Magisk / KernelSU module that replaces the system Google Photos at boot. For rooted devices.
 - `release-notes.md` + `meta.json` — the exact Photos version, ReVanced CLI version, patches version, and SHA-256 of the signed APK.
 
+The patched APK ships with a **grayscaled launcher icon** so it's visually distinct from the stock Google Photos on devices where both are installed. Set `SKIP_ICON_RECOLOR=true` to keep the original colored icon.
+
 ## How it works
 
 1. **Resolve version** — `apkeep -l` queries APKPure for the current latest 4-segment version of `com.google.android.apps.photos`. Override per build with the `GPHOTOS_VERSION` env var, or pin via `config/versions.json`.

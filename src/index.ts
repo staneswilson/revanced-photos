@@ -13,9 +13,11 @@ import { buildPatchConfig } from './core/patchConfig.js';
 import { runPatcher } from './core/patcher.js';
 import { signApk } from './core/signer.js';
 import { buildMagiskModule } from './core/magisk.js';
+import { recolorLauncherIcons } from './core/iconRecolor.js';
 
 async function calculateFileSha256(filePath: string): Promise<string> {
   const hash = crypto.createHash('sha256');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
   const readStream = fsSync.createReadStream(filePath);
   await pipeline(readStream, hash);
   return hash.digest('hex');
@@ -23,6 +25,7 @@ async function calculateFileSha256(filePath: string): Promise<string> {
 
 async function writeReleaseMeta(data: any): Promise<void> {
   const metaPath = CONFIG.paths.releaseMeta;
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.writeFile(metaPath, JSON.stringify(data.meta, null, 2));
 
   const notesPath = CONFIG.paths.releaseNotes;
@@ -54,13 +57,16 @@ async function writeReleaseMeta(data: any): Promise<void> {
   notes += `1. Flash the provided \`.zip\` module in Magisk/KernelSU.\n`;
   notes += `2. Reboot. Google Photos will be replaced at the system level.\n`;
 
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.writeFile(notesPath, notes);
 }
 
 async function main() {
   try {
     // Step 1 — Prepare workspace
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.mkdir(CONFIG.paths.workspace, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.mkdir(CONFIG.paths.toolsDir, { recursive: true });
 
     // Step 2 — Fetch ReVanced release metadata
@@ -80,7 +86,11 @@ async function main() {
     await downloadFile(release.cli.downloadUrl, cliPath, 'revanced-cli');
     await downloadFile(release.patches.downloadUrl, patchesPath, 'revanced-patches');
     if (release.integrations && integrationsPath) {
-      await downloadFile(release.integrations.downloadUrl, integrationsPath, 'revanced-integrations');
+      await downloadFile(
+        release.integrations.downloadUrl,
+        integrationsPath,
+        'revanced-integrations',
+      );
     }
 
     // Step 4 — Verify all tool checksums.
@@ -98,7 +108,8 @@ async function main() {
     else logger.warn(skipReason(release.patches.name));
 
     if (release.integrations && integrationsPath) {
-      if (release.integrations.sha256) await verifySha256(integrationsPath, release.integrations.sha256);
+      if (release.integrations.sha256)
+        await verifySha256(integrationsPath, release.integrations.sha256);
       else logger.warn(skipReason(release.integrations.name));
     }
     logger.info('[orchestrator] Tool checksum verification step complete');
@@ -107,9 +118,30 @@ async function main() {
     const apkResult = await fetchGPhotosApk(CONFIG.paths.inputApk);
     logger.info(`[orchestrator] Google Photos ${apkResult.version} downloaded`);
 
+    // Step 5b — Recolor launcher icons (cosmetic; runs BEFORE the patcher so
+    // the CLI's existing zipalign pass cleans up any alignment shift our zip
+    // rewrite introduces). Skippable via SKIP_ICON_RECOLOR=true; per-entry
+    // failures are non-fatal and logged inside recolorLauncherIcons.
+    if (process.env[CONFIG.envKeys.skipIconRecolor] === 'true') {
+      logger.info('[orchestrator] SKIP_ICON_RECOLOR=true — keeping stock launcher icon colors');
+    } else {
+      try {
+        const recolorResult = await recolorLauncherIcons(CONFIG.paths.inputApk);
+        logger.info(
+          `[orchestrator] Icon recolor: ${recolorResult.recolored} recolored, ${recolorResult.skipped} skipped, ${recolorResult.scanned} scanned`,
+        );
+      } catch (err: any) {
+        logger.warn(
+          `[orchestrator] Icon recolor failed (continuing with stock icons): ${err?.message || err}`,
+        );
+      }
+    }
+
     // Step 6 — Build patch configuration
     const patchConfig = await buildPatchConfig(cliPath, patchesPath, CONFIG.paths.workspace);
-    logger.info(`[orchestrator] Patch config built: ${patchConfig.appliedPatches.map((p: any) => p.name).join(', ')}`);
+    logger.info(
+      `[orchestrator] Patch config built: ${patchConfig.appliedPatches.map((p: any) => p.name).join(', ')}`,
+    );
 
     // Step 7 — Patch
     await runPatcher({
@@ -161,11 +193,10 @@ async function main() {
         revancedIntegrationsVersion: release.integrations?.name ?? 'n/a (CLI v6+)',
         appliedPatches: patchConfig.appliedPatches.map((p: any) => p.name),
         signedApkSha256,
-        magiskZipSha256
-      }
+        magiskZipSha256,
+      },
     });
     logger.info('[orchestrator] Pipeline complete');
-
   } catch (err: any) {
     logger.error('[orchestrator] Pipeline failed', err);
     process.exit(1);
