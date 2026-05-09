@@ -14,19 +14,24 @@ export interface PatcherOptions {
   outputApkPath: string;
   cliJarPath: string;
   patchesJarPath: string;
-  integrationsApkPath?: string | null;  // Optional — removed in CLI v6+
+  /** Ignored in CLI v6+ (integrations are now bundled into the RVP). */
+  integrationsApkPath?: string | null;
   patchConfig: ResolvedPatchConfig;
 }
 
 export async function runPatcher(options: PatcherOptions): Promise<void> {
+  // ReVanced CLI v6 patch syntax: `-p <rvp> -b` (bypass PGP — TLS to api.revanced.app
+  // is the integrity guarantee for now), `-e <name>` per patch, `-o <output>`,
+  // positional <input>. The old `--merge`, `--options <file>`, `-i`, and
+  // `--patch-bundle` flags are all gone. Patch options use defaults — the
+  // "Spoof features" patch already targets Pixel XL out of the box.
   const args = [
     '-jar', options.cliJarPath,
     'patch',
-    '--patch-bundle', options.patchesJarPath,
-    ...(options.integrationsApkPath ? ['--merge', options.integrationsApkPath] : []),
-    '--options', options.patchConfig.optionsPath,
-    ...options.patchConfig.includeFlags,
-    '--out', options.outputApkPath,
+    '-p', options.patchesJarPath,
+    '-b',
+    ...options.patchConfig.enableFlags,
+    '-o', options.outputApkPath,
     options.inputApkPath,
   ];
 

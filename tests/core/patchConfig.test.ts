@@ -1,43 +1,61 @@
 import { describe, it, expect, vi } from 'vitest';
 import { buildPatchConfig, PatchResolutionError } from '../../src/core/patchConfig.js';
 import * as child_process from 'child_process';
-import fs from 'fs/promises';
-import path from 'path';
+
+// Mock ReVanced CLI v6 `list-patches` output. Each patch is rendered as a
+// multi-line block with `Name: <patch>` on its own line — that's what the
+// resolver matches against.
+const v6ListPatchesOutput = `INFO: Index: 47
+Name: Spoof features
+Description: Spoofs the device to enable Google Pixel exclusive features.
+Enabled: true
+Compatible packages:
+\tPackage name: com.google.android.apps.photos
+
+Index: 48
+Name: GmsCore support
+Description: Allows the app to work without root using a different package name.
+Enabled: true
+Compatible packages:
+\tPackage name: com.google.android.apps.photos
+`;
 
 vi.mock('child_process', () => ({
   execFile: vi.fn((cmd, args, options, callback) => {
-    const stdout = `
-INFO: spoof-features [com.google.android.apps.photos]
-INFO: gmscore-support [com.google.android.apps.photos]
-    `;
-    callback(null, stdout, '');
+    callback(null, v6ListPatchesOutput, '');
   }),
 }));
 
-vi.mock('fs/promises', () => ({
-  default: {
-    writeFile: vi.fn().mockResolvedValue(undefined),
-  }
-}));
-
 describe('patchConfig', () => {
-  it('should resolve required patches and generate options.json', async () => {
-    const config = await buildPatchConfig('cli.jar', 'patches.jar', '/workspace');
-    
-    expect(config.includeFlags).toEqual(['-i', 'spoof-features', '-i', 'gmscore-support']);
-    expect(config.appliedPatches.length).toBe(2);
-    expect(config.optionsPath).toBe(path.join('/workspace', 'options.json'));
-    expect(fs.writeFile).toHaveBeenCalledWith(
-      config.optionsPath,
-      expect.stringContaining('Device manufacturer')
+  it('should resolve required v6 patches and emit -e enable flags', async () => {
+    const config = await buildPatchConfig('cli.jar', 'patches.rvp', '/workspace');
+
+    expect(config.enableFlags).toEqual(['-e', 'Spoof features', '-e', 'GmsCore support']);
+    expect(config.appliedPatches.map((p) => p.name)).toEqual(['Spoof features', 'GmsCore support']);
+  });
+
+  it('should invoke list-patches with v6 syntax (-p, -b, --filter-package-name)', async () => {
+    await buildPatchConfig('cli.jar', 'patches.rvp', '/workspace');
+    expect(child_process.execFile).toHaveBeenCalledWith(
+      'java',
+      [
+        '-jar', 'cli.jar',
+        'list-patches',
+        '-p', 'patches.rvp',
+        '-b',
+        '--filter-package-name=com.google.android.apps.photos',
+        '--packages',
+      ],
+      expect.any(Object),
+      expect.any(Function),
     );
   });
 
   it('should throw PatchResolutionError when a required patch is absent', async () => {
     vi.mocked(child_process.execFile).mockImplementationOnce((cmd, args, options, callback: any) => {
-      callback(null, 'INFO: other-patch [com.google.android.youtube]', '');
+      callback(null, 'Index: 0\nName: Some unrelated patch\n', '');
     });
 
-    await expect(buildPatchConfig('cli.jar', 'patches.jar', '/workspace')).rejects.toThrowError(PatchResolutionError);
+    await expect(buildPatchConfig('cli.jar', 'patches.rvp', '/workspace')).rejects.toThrowError(PatchResolutionError);
   });
 });

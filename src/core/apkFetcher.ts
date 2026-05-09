@@ -52,7 +52,7 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
 
   const args = [
     '-a', packageNameArg,
-    '-d', 'apkpure',
+    '-d', 'apk-pure',
     outDir,
   ];
 
@@ -60,7 +60,7 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
 
   try {
     // apkeep must be in PATH
-    const { stdout } = await execFileAsync('apkeep', args);
+    const { stdout, stderr } = await execFileAsync('apkeep', args);
 
     const match = stdout.match(/Downloading .*? ([0-9.]+)/i);
     let version = versionPin || 'unknown';
@@ -68,9 +68,42 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
       version = match[1];
     } else {
       logger.warn(`[apkFetcher] Could not parse version from apkeep stdout: ${stdout.substring(0, 200)}`);
+      if (stderr) logger.warn(`[apkFetcher] apkeep stderr: ${stderr.substring(0, 500)}`);
     }
 
-    const downloadedFile = path.join(outDir, `${CONFIG.packageName}.apk`);
+    // apkeep's output layout has changed across versions: older builds wrote
+    // "<package>.apk" flat in outDir, newer ones write "<package>@<ver>.apk"
+    // or nest the file inside a "<package>/" subdirectory. Scan recursively.
+    const allEntries = (await fs.readdir(outDir, { recursive: true })) as string[];
+    const apkCandidates = allEntries.filter((rel) => {
+      const base = path.basename(rel);
+      return base.startsWith(CONFIG.packageName) && base.toLowerCase().endsWith('.apk');
+    });
+    if (apkCandidates.length === 0) {
+      const xapk = allEntries.find((rel) =>
+        path.basename(rel).startsWith(CONFIG.packageName) &&
+        path.basename(rel).toLowerCase().endsWith('.xapk'),
+      );
+      if (xapk) {
+        throw new ApkFetchError(
+          `apkeep produced an XAPK (${xapk}) — split-APK bundles are not supported by this pipeline`,
+        );
+      }
+      // apkeep 0.17.0 silently exits 0 with empty stdout/stderr when the
+      // pinned version doesn't exist on APKPure. Surface that hypothesis.
+      const hint = versionPin
+        ? `\nLikely cause: pinned version "${versionPin}" does not exist on APKPure. Run \`apkeep -l -a ${CONFIG.packageName} -d apk-pure <outdir>\` to list available versions.`
+        : '';
+      throw new ApkFetchError(
+        `apkeep produced no APK matching "${CONFIG.packageName}*.apk" under ${outDir}. Tree: ${allEntries.join(', ') || '(empty)'}.${hint}`,
+      );
+    }
+    if (apkCandidates.length > 1) {
+      throw new ApkFetchError(
+        `apkeep produced multiple APKs (${apkCandidates.join(', ')}); split-APK handling is not implemented`,
+      );
+    }
+    const downloadedFile = path.join(outDir, apkCandidates[0]!);
     await fs.rename(downloadedFile, outputPath);
 
     return {

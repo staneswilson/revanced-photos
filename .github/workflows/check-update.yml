@@ -27,11 +27,15 @@ jobs:
       - name: Fetch Latest Version from APKPure
         id: fetch-version
         run: |
-          # Use apkeep to get the latest version string
-          # Example output parsing: "Downloading com.google.android.apps.photos 6.91.0"
-          LATEST_VERSION=$(apkeep -a com.google.android.apps.photos -d apkpure -l | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | head -n 1 || echo "")
+          # apkeep 0.17.0: -d takes 'apk-pure' (not 'apkpure'); -l also requires OUTPATH.
+          # The version listing is comma-separated on a single line; pick the LAST 4-segment
+          # version (the most recent — the list is ordered oldest→newest).
+          mkdir -p /tmp/apkeep-list
+          LISTING=$(apkeep -l -a com.google.android.apps.photos -d apk-pure /tmp/apkeep-list)
+          LATEST_VERSION=$(echo "$LISTING" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | tail -n 1)
           if [ -z "$LATEST_VERSION" ]; then
-             echo "Failed to fetch version"
+             echo "Failed to fetch version. Raw listing:"
+             echo "$LISTING"
              exit 1
           fi
           echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_OUTPUT
@@ -41,8 +45,12 @@ jobs:
         run: |
           PINNED=$(jq -r '.gphotos.version' config/versions.json)
           LATEST="${{ steps.fetch-version.outputs.LATEST_VERSION }}"
-          
-          if [ "$PINNED" != "$LATEST" ]; then
+
+          # Empty pin = intentional "always latest"; don't PR-spam.
+          if [ -z "$PINNED" ] || [ "$PINNED" = "null" ]; then
+             echo "No version pinned (always-latest mode). Latest on APKPure: $LATEST. Skipping PR."
+             echo "has_update=false" >> $GITHUB_OUTPUT
+          elif [ "$PINNED" != "$LATEST" ]; then
              echo "New version found: $LATEST (was $PINNED)"
              jq ".gphotos.version = \"$LATEST\" | .gphotos.updatedAt = \"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\"" config/versions.json > temp.json && mv temp.json config/versions.json
              echo "has_update=true" >> $GITHUB_OUTPUT

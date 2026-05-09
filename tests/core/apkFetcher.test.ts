@@ -18,6 +18,7 @@ vi.mock('fs/promises', () => ({
   default: {
     rename: vi.fn().mockResolvedValue(undefined),
     readFile: vi.fn().mockRejectedValue(new Error('no versions.json')),
+    readdir: vi.fn().mockResolvedValue(['com.google.android.apps.photos@6.91.0.apk']),
   }
 }));
 
@@ -26,7 +27,7 @@ describe('apkFetcher', () => {
     const result = await fetchGPhotosApk('/tmp/input.apk');
     expect(child_process.execFile).toHaveBeenCalledWith(
       'apkeep',
-      ['-a', 'com.google.android.apps.photos', '-d', 'apkpure', '/tmp'],
+      ['-a', 'com.google.android.apps.photos', '-d', 'apk-pure', '/tmp'],
       expect.any(Object),
       expect.any(Function)
     );
@@ -39,7 +40,7 @@ describe('apkFetcher', () => {
     await fetchGPhotosApk('/tmp/input2.apk');
     expect(child_process.execFile).toHaveBeenCalledWith(
       'apkeep',
-      ['-a', 'com.google.android.apps.photos@6.90.0', '-d', 'apkpure', '/tmp'],
+      ['-a', 'com.google.android.apps.photos@6.90.0', '-d', 'apk-pure', '/tmp'],
       expect.any(Object),
       expect.any(Function)
     );

@@ -10,11 +10,14 @@ export const CONFIG = Object.freeze({
     manufacturer: 'Google',
     model: 'Pixel XL',
     product: 'marlin',
-    patchName: 'spoof-features',
   },
+  // ReVanced patches v6 patch names (capitalized, with spaces). The "Spoof
+  // features" patch ships with defaults that already enable NEXUS_PRELOAD
+  // (Pixel XL) and disable all newer Pixel features — exactly the unlimited-
+  // storage configuration — so no per-option overrides are needed.
   requiredPatches: [
-    { name: 'spoof-features',   required: true  },
-    { name: 'gmscore-support',  required: true  },
+    { name: 'Spoof features', required: true },
+    { name: 'GmsCore support', required: true },
   ],
   paths: {
     workspace:    'workspace',
@@ -22,7 +25,6 @@ export const CONFIG = Object.freeze({
     patchedApk:   'workspace/output-patched.apk',
     signedApk:    'workspace/output-signed.apk',
     magiskZip:    'workspace/magisk-revanced-gphotos.zip',
-    optionsJson:  'workspace/options.json',
     releaseMeta:  'workspace/meta.json',
     releaseNotes: 'workspace/release-notes.md',
     toolsDir:     'workspace/tools',
