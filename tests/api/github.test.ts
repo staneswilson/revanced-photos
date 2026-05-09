@@ -30,7 +30,17 @@ const server = setupServer(
   // Checksums
   http.get('https://example.com/checksums.txt', () => {
     return HttpResponse.text(checksumsTxt);
-  })
+  }),
+  // ReVanced v5 API fallback (used when GitHub patches repo is taken down)
+  http.get('https://api.revanced.app/v5/patches', () => {
+    return HttpResponse.json({
+      version: 'v6.2.0',
+      created_at: '2026-04-21T15:54:36',
+      description: 'changelog',
+      download_url: 'https://api.revanced.app/v5/patches.rvp',
+      signature_download_url: 'https://api.revanced.app/v5/patches.rvp.asc',
+    });
+  }),
 );
 
 describe('GitHub API Utils', () => {
@@ -92,8 +102,41 @@ describe('GitHub API Utils', () => {
         return new HttpResponse(null, { status: 404 });
       })
     );
-    
+
     const result = await fetchLatestReVancedRelease('ReVanced', 'revanced-cli');
+    expect(result.integrations).toBeNull();
+  });
+
+  it('should fall back to ReVanced v5 API when patches repo returns HTTP 451', async () => {
+    // CLI release without a bundled revanced-patches-* asset, so the
+    // CLI-bundled fallback also fails and the v5 API path is exercised.
+    const cliOnlyRelease = {
+      tag_name: 'v6.0.0',
+      assets: [
+        {
+          name: 'revanced-cli-6.0.0-all.jar',
+          browser_download_url: 'https://example.com/revanced-cli-6.0.0-all.jar',
+          digest: 'sha256:hash_cli_v6',
+        },
+      ],
+    };
+    server.use(
+      http.get('https://api.github.com/repos/ReVanced/revanced-cli/releases/latest', () => {
+        return HttpResponse.json(cliOnlyRelease);
+      }),
+      http.get('https://api.github.com/repos/ReVanced/revanced-patches/releases/latest', () => {
+        return new HttpResponse(null, { status: 451 });
+      }),
+      http.get('https://api.github.com/repos/ReVanced/revanced-integrations/releases/latest', () => {
+        return new HttpResponse(null, { status: 404 });
+      }),
+    );
+
+    const result = await fetchLatestReVancedRelease('ReVanced', 'revanced-cli');
+    expect(result.cli.sha256).toBe('hash_cli_v6');
+    expect(result.patches.name).toBe('revanced-patches-6.2.0.rvp');
+    expect(result.patches.downloadUrl).toBe('https://api.revanced.app/v5/patches.rvp');
+    expect(result.patches.sha256).toBeNull();
     expect(result.integrations).toBeNull();
   });
 });

@@ -83,13 +83,25 @@ async function main() {
       await downloadFile(release.integrations.downloadUrl, integrationsPath, 'revanced-integrations');
     }
 
-    // Step 4 — Verify all tool checksums
-    await verifySha256(cliPath, release.cli.sha256);
-    await verifySha256(patchesPath, release.patches.sha256);
+    // Step 4 — Verify all tool checksums.
+    // sha256 may be null when an asset comes from a feed that doesn't publish a
+    // hash (e.g. the ReVanced v5 API used as a 451 fallback). In that case we
+    // skip pre-download verification — TLS to the official source is the only
+    // integrity guarantee — and warn loudly so it's visible in CI logs.
+    const skipReason = (label: string) =>
+      `[orchestrator] No SHA-256 published for ${label}; skipping pre-download verification (asset trusted via TLS to official source)`;
+
+    if (release.cli.sha256) await verifySha256(cliPath, release.cli.sha256);
+    else logger.warn(skipReason(release.cli.name));
+
+    if (release.patches.sha256) await verifySha256(patchesPath, release.patches.sha256);
+    else logger.warn(skipReason(release.patches.name));
+
     if (release.integrations && integrationsPath) {
-      await verifySha256(integrationsPath, release.integrations.sha256);
+      if (release.integrations.sha256) await verifySha256(integrationsPath, release.integrations.sha256);
+      else logger.warn(skipReason(release.integrations.name));
     }
-    logger.info('[orchestrator] All tool checksums verified');
+    logger.info('[orchestrator] Tool checksum verification step complete');
 
     // Step 5 — Fetch base APK
     const apkResult = await fetchGPhotosApk(CONFIG.paths.inputApk);

@@ -4,8 +4,21 @@ import { logger } from '../utils/logger.js';
 export interface ReleaseAsset {
   name: string;
   downloadUrl: string;
-  sha256: string;
+  /**
+   * SHA-256 of the asset.
+   * Null when sourced from a feed that doesn't publish a hash (e.g. the official
+   * ReVanced v5 API). The orchestrator must skip pre-download verification in
+   * that case and emit a warning.
+   */
+  sha256: string | null;
 }
+
+const REVANCED_API_PATCHES_URL = 'https://api.revanced.app/v5/patches';
+
+const RevancedApiPatchesSchema = z.object({
+  version: z.string(),
+  download_url: z.string().url(),
+});
 
 export interface ReVancedRelease {
   tag: string;
@@ -122,6 +135,29 @@ async function resolveAsset(
   throw new Error(`Could not resolve SHA-256 for ${asset.name}`);
 }
 
+/**
+ * Fetches the latest patches bundle from the official ReVanced API as a
+ * fallback for when GitHub releases are inaccessible (e.g. HTTP 451 from a
+ * DMCA takedown). The v5 API does not expose a SHA-256 hash — the asset is
+ * GPG-signed instead — so the returned ReleaseAsset has sha256: null.
+ */
+async function fetchPatchesFromRevancedApi(): Promise<ReleaseAsset> {
+  logger.info(`[github] Falling back to official ReVanced API: ${REVANCED_API_PATCHES_URL}`);
+  const response = await fetchWithRetry(REVANCED_API_PATCHES_URL, {
+    headers: { Accept: 'application/json', 'User-Agent': 'photos-revanced-pipeline' },
+  });
+  if (!response.ok) {
+    throw new Error(`ReVanced API patches fetch failed: HTTP ${response.status}`);
+  }
+  const data = RevancedApiPatchesSchema.parse(await response.json());
+  const cleanVersion = data.version.replace(/^v/, '');
+  return {
+    name: `revanced-patches-${cleanVersion}.rvp`,
+    downloadUrl: data.download_url,
+    sha256: null,
+  };
+}
+
 export async function fetchLatestReVancedRelease(org: string, repo: string): Promise<ReVancedRelease> {
   // CLI v6 ships everything in one repo: revanced-cli
   // Patches are now `.rvp` bundles from revanced-patches (separate repo, same pattern)
@@ -173,8 +209,14 @@ export async function fetchLatestReVancedRelease(org: string, repo: string): Pro
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(`[github] Could not fetch patches from revanced-patches repo: ${msg}`);
-    logger.warn(`[github] Falling back to patches bundled with CLI release (if any)`);
-    patches = await resolveAsset('revanced-patches', cliRelease.assets, fetchFallback);
+    logger.warn(`[github] Trying patches bundled with CLI release...`);
+    try {
+      patches = await resolveAsset('revanced-patches', cliRelease.assets, fetchFallback);
+    } catch (cliErr) {
+      const cliMsg = cliErr instanceof Error ? cliErr.message : String(cliErr);
+      logger.warn(`[github] CLI release does not bundle patches: ${cliMsg}`);
+      patches = await fetchPatchesFromRevancedApi();
+    }
   }
 
   // Integrations — optional (removed in CLI v6+)
