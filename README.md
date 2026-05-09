@@ -1,108 +1,79 @@
 # ReVanced Google Photos Pipeline
 
-An automated, highly secure CI/CD pipeline that patches Google Photos using the ReVanced toolchain to spoof the Pixel XL (marlin) device fingerprint. This unlocks unlimited original-quality backups on your Google account.
+[![build-and-release](https://github.com/staneswilson/revanced-photos/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/staneswilson/revanced-photos/actions/workflows/build-and-release.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Latest release](https://img.shields.io/github/v/release/staneswilson/revanced-photos?include_prereleases&label=release)](https://github.com/staneswilson/revanced-photos/releases/latest)
 
-**Note:** This pipeline creates a client-side spoof. To use the patched app, non-rooted users must install MicroG (or GmsCore). Rooted users can flash the provided Magisk module to seamlessly replace the system app.
+An automated GitHub Actions pipeline that patches Google Photos with [ReVanced](https://revanced.app) to spoof the Pixel XL (`marlin`) device fingerprint. Pixel XL was sold with a permanent, account-bound entitlement to **unlimited original-quality Google Photos backups** — by making the app report itself as a Pixel XL, the entitlement is granted to the signed-in account regardless of the actual device.
 
-## Features & Architecture
+The pipeline runs weekly, fetches the latest patch-compatible Google Photos APK from APKPure, applies the ReVanced `Spoof features` and `GmsCore support` patches, signs the result with your keystore, and publishes the artifacts as a GitHub Release.
 
-*   **Fully Automated:** A GitHub Action fetches the base APK, downloads ReVanced components, verifies their checksums, patches the app, signs it, and publishes a Release.
-*   **Zero Binaries Committed:** Clean repository — no `.apk` or `.keystore` files in your git history.
-*   **Security First:** 
-    *   SHA-256 cryptographic verification of all downloaded ReVanced tools.
-    *   Ephemeral keystores injected via GitHub Secrets and securely wiped after signing.
-    *   No shell injection (strict `execFile` implementation).
-    *   GitHub Action versions are strictly pinned by SHA to prevent supply-chain attacks.
+## What you get on every release
 
-See [docs/architecture.md](docs/architecture.md) for detailed data flows and threat mitigations.
+- `output-signed.apk` — patched, re-signed Google Photos APK. Install on a non-rooted device alongside [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases).
+- `magisk-revanced-gphotos.zip` — Magisk / KernelSU module that replaces the system Google Photos at boot. For rooted devices.
+- `release-notes.md` + `meta.json` — the exact Photos version, ReVanced CLI version, patches version, and SHA-256 of the signed APK.
 
----
+## How it works
 
-## Prerequisites
+1. **Resolve version** — `apkeep -l` queries APKPure for the current latest 4-segment version of `com.google.android.apps.photos`. Override per build with the `GPHOTOS_VERSION` env var, or pin via `config/versions.json`.
+2. **Fetch tooling** — ReVanced CLI v6 from `github.com/ReVanced/revanced-cli` (SHA-256 verified via the asset `digest` field). Patches RVP from `github.com/ReVanced/revanced-patches`, with automatic fallback to `https://api.revanced.app/v5/patches` when GitHub returns HTTP 451.
+3. **Patch** — `revanced-cli patch -p patches.rvp -b -e "Spoof features" -e "GmsCore support" -o output.apk input.apk`. The `Spoof features` patch defaults to enabling `NEXUS_PRELOAD` (Pixel XL) and disabling all newer Pixel features — exactly the unlimited-storage configuration.
+4. **Sign + package** — `apksigner` re-signs with your keystore (Base64-injected via GitHub Secrets, written 0o600, secure-wiped after use). The signed APK is then bundled into a Magisk module via `archiver`.
 
-To run this pipeline locally or fork it for your own GitHub Actions, you need:
+See [docs/architecture.md](docs/architecture.md) for the data flow and threat model.
 
-1.  **Node.js 20+** and **pnpm 8+**
-2.  **Java 17+** (Required by ReVanced CLI and `apksigner`)
-3.  **Android Build Tools** (specifically `apksigner`)
-4.  **apkeep** (CLI tool for downloading APKs)
+## Quick start
 
----
+1. Fork the repo.
+2. Generate a signing keystore: `keytool -genkeypair -keystore release.jks -alias revanced -keyalg RSA -keysize 2048 -validity 10000`.
+3. Add four repository secrets under **Settings → Secrets and variables → Actions**: `KEYSTORE_BASE64` (your `.jks` Base64-encoded), `KEY_ALIAS`, `KEY_STORE_PASS`, `KEY_PASS`.
+4. Trigger the **build-and-release** workflow from the **Actions** tab.
 
-## Setup Guide (Fork & Deploy)
+Detailed setup (including local builds): [SETUP.md](SETUP.md).
 
-Follow these steps to deploy your own automated builder:
+## Installation
 
-### 1. Fork the Repository
-Fork this repository to your own GitHub account.
+### Non-rooted devices (signed APK + MicroG)
 
-### 2. Generate a Signing Keystore
-You need your own cryptographic key to sign the output APK. Run the following command in your terminal (do **not** commit this file):
+1. Install [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases). Required — without it the patched app cannot reach Google services.
+2. Download `output-signed.apk` from the [latest release](https://github.com/staneswilson/revanced-photos/releases/latest).
+3. Install the APK. Sign in with your Google account.
 
-\`\`\`bash
-keytool -genkey -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias myalias
-\`\`\`
+### Rooted devices (Magisk / KernelSU module)
 
-*Remember the Keystore Password and the Key Password you enter.*
+1. Download `magisk-revanced-gphotos.zip` from the [latest release](https://github.com/staneswilson/revanced-photos/releases/latest).
+2. Magisk → Modules → Install from storage → select the zip.
+3. Reboot. The patched app replaces the stock Google Photos at the system level.
 
-### 3. Encode the Keystore to Base64
-GitHub Secrets require text. Encode your `.jks` file:
+## Security properties
 
-**Linux / WSL:**
-\`\`\`bash
-base64 -w 0 release.jks > keystore.b64
-\`\`\`
+Concrete things the pipeline does, in order of strength:
 
-**macOS:**
-\`\`\`bash
-base64 -i release.jks | tr -d '\n' > keystore.b64
-\`\`\`
+- **Pinned GitHub Action SHAs.** All actions are referenced by full commit SHA, not floating tags — no supply-chain swap via tag re-pointing.
+- **No binaries in git.** `.gitignore` enforces no `.apk`, `.jks`, or keystore artifacts are tracked.
+- **Ephemeral keystore.** Decoded from Base64 secret at runtime, written with `0o600` permissions, secure-wiped (random overwrite + unlink) in a `try/finally` block — wiped even if the build crashes.
+- **No shell interpolation.** All external invocations use Node's `child_process.execFile` with explicit argument arrays. Package names, versions, and paths cannot break out into shell commands.
+- **SHA-256 verification (best effort).** ReVanced CLI and integrations are verified against the digest published by the upstream release. The patches RVP is verified when sourced from GitHub. When the v5 API fallback is used (because GitHub returns 451), the API publishes no SHA-256 — integrity rests on TLS to `api.revanced.app`. The asset is GPG-signed via the `signature_download_url` sidecar; verifying that signature against ReVanced's public key is the planned next hardening step.
 
-### 4. Configure GitHub Secrets
-Go to your forked repository's **Settings > Secrets and variables > Actions** and add the following **Repository secrets** (the names must match exactly):
+## FAQ
 
-| Secret Name | Description |
-|---|---|
-| \`KEYSTORE_BASE64\` | The exact contents of your `keystore.b64` file. |
-| \`KEY_ALIAS\` | The alias you used in Step 2 (e.g., `myalias`). |
-| \`KEY_STORE_PASS\` | The keystore password. |
-| \`KEY_PASS\` | The key password. |
+**Why Pixel XL specifically?**
+Google grandfathered unlimited original-quality Photos backups for the original Pixel and Pixel XL (codenames `sailfish` and `marlin`). The entitlement is checked client-side via the `com.google.android.apps.photos.NEXUS_PRELOAD` system feature, which the `Spoof features` patch can fake on any device.
 
-### 5. Trigger the Build
-1. Go to the **Actions** tab in your repository.
-2. Select the **build-and-release** workflow.
-3. Click **Run workflow**.
+**Do I need root?**
+No. The signed APK + [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases) path works on stock Android. Root is optional and unlocks the Magisk module path, which seamlessly replaces the system Google Photos.
 
-The action will run, fetch the latest APK, patch it, sign it, and publish a new Release containing your `.apk` and `.zip` files.
+**Will Google block this eventually?**
+Possibly. Google has progressively tightened device attestation for some services. The project is best-effort — when ReVanced patches are updated to handle Google's changes, the next weekly build picks them up automatically.
 
----
+**Is it safe to put my Google account on a patched APK?**
+You're installing a modified version of a Google application. Treat it like any third-party app: review what the pipeline does (the source is in this repo, the build is reproducible from CI), and decide. The patches modify only client-side feature reporting; they don't add network code or telemetry.
 
-## Installation Paths
+## Disclaimer
 
-### Option A: Non-Rooted Devices (Standard APK)
-1. Download and install [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases). This is strictly required to log in.
-2. Download the `output-signed.apk` from the latest GitHub Release.
-3. Install the APK.
-
-### Option B: Rooted Devices (Magisk Module)
-This is the recommended path for rooted users. It replaces the system Google Photos app.
-1. Download the `magisk-revanced-gphotos.zip` from the latest GitHub Release.
-2. Open the Magisk or KernelSU app.
-3. Go to Modules -> Install from storage, and select the zip.
-4. Reboot your device.
-
----
-
-## Version Pinning Automation
-
-This repository separates version detection from the build pipeline. 
-- The `check-update.yml` workflow runs weekly, queries APKPure for the latest Google Photos version, and opens a Pull Request updating `config/versions.json`.
-- The `build-and-release.yml` workflow runs weekly to build the version specified in `versions.json`. 
-
-You can manually force a specific version by setting a `GPHOTOS_VERSION` repository secret.
-
----
+This project is not affiliated with, sponsored by, or endorsed by Google LLC, ReVanced, MicroG, KernelSU, or Magisk. "Google Photos", "Pixel", and "Pixel XL" are trademarks of Google LLC. "Magisk" and "KernelSU" are trademarks of their respective owners. The project is provided as-is, intended for personal use of your own Google account, and ships under the terms below. You are responsible for complying with Google's terms of service and any local laws.
 
 ## License
 
-This project is licensed under the GPL-3.0 License, consistent with the ReVanced ecosystem.
+[GPL-3.0](LICENSE), consistent with the ReVanced ecosystem.

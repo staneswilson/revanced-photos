@@ -36,6 +36,8 @@ $env:Path += ";$env:LOCALAPPDATA\Android\Sdk\build-tools\34.0.0"
 apksigner --version
 ```
 
+> **apkeep CLI note.** The internal download-source value is `apk-pure` (lowercase, hyphenated). If you ever invoke `apkeep` by hand, use `-d apk-pure`, not `-d apkpure` — the latter is rejected by 0.17.0+ as `invalid value`.
+
 ---
 
 ## Step 1 — Generate a Signing Keystore
@@ -91,9 +93,11 @@ KEY_STORE_PASS=changeme
 KEY_PASS=changeme
 
 # Optional
-# GPHOTOS_VERSION=6.91.0.636766573
+# GPHOTOS_VERSION=7.75.0.911466973
 # SKIP_MAGISK=true
 ```
+
+> **About `GPHOTOS_VERSION`.** This is *optional*. When unset (and `config/versions.json` has an empty `gphotos.version`), the orchestrator runs `apkeep -l` first to read APKPure's current latest 4-segment version of `com.google.android.apps.photos` and uses it for the build. Pin a value here only if you want to lock to a specific Photos build — and use the full 4-segment APKPure version (e.g. `7.75.0.911466973`), not the 3-segment marketing version (`7.75.0`), which APKPure does not recognize as an exact match.
 
 ### Generate a GitHub Personal Access Token (PAT)
 
@@ -155,7 +159,10 @@ Then trigger the pipeline manually:
 |-------|-----|
 | `apksigner: command not found` | Add Android SDK build-tools to PATH |
 | `apkeep: command not found` | Install apkeep (Step 0) and ensure it is in PATH |
+| `invalid value 'apkpure' for '--download-source'` | apkeep ≥ 0.17.0 renamed the value to `apk-pure`. The pipeline already uses the new value; this only affects manual `apkeep` invocations. |
+| `apkeep produced no APK matching ...` (silent failure, exit 0, empty stdout) | Pinned `GPHOTOS_VERSION` doesn't exist on APKPure. Run `apkeep -l -a com.google.android.apps.photos -d apk-pure ./tmp` to list real versions, then either pin a 4-segment match or leave the pin empty (auto-resolves latest). |
 | `Missing required environment variables` | Check your `.env` file has all required keys |
-| `Missing required patch 'spoof-features'` | ReVanced updated their patch names — check [revanced-patches releases](https://github.com/ReVanced/revanced-patches/releases) |
+| `Missing required patch 'Spoof features'` or `'GmsCore support'` | ReVanced renamed these patches in v6 (capitalized, with spaces). Check [revanced-patches releases](https://github.com/ReVanced/revanced-patches/releases) for further drift. |
+| `Failed to fetch release for revanced-patches: HTTP 451` | Expected — the pipeline auto-falls back to `https://api.revanced.app/v5/patches`. Should not abort the build; if it does, check that your runner can reach `api.revanced.app`. |
 | `HTTP 403` from GitHub API | Your `GITHUB_TOKEN` is invalid or expired |
 | `Signature verification failed` | Keystore alias/password mismatch — regenerate with correct values |
