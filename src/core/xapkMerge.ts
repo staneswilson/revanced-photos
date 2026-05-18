@@ -1,6 +1,7 @@
 import { execFile as execFileOriginal } from 'child_process';
 import { logger } from '../utils/logger.js';
 import { CONFIG } from '../config.js';
+import { logAbiInventory } from './abiInventory.js';
 
 const execFileAsync = (cmd: string, args: string[], options?: any) =>
   new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
@@ -45,6 +46,7 @@ export async function mergeXapkToApk(xapkPath: string, outputApkPath: string): P
     if (stdout.trim()) logger.info(`[xapkMerge] APKEditor stdout: ${stdout.trim().slice(-500)}`);
     if (stderr.trim()) logger.info(`[xapkMerge] APKEditor stderr: ${stderr.trim().slice(-500)}`);
     logger.info(`[xapkMerge] Wrote merged APK to ${outputApkPath}`);
+    logAbiInventory(outputApkPath, 'merged APK');
   } catch (error: any) {
     const stderrSnippet = error?.stderr
       ? String(error.stderr).slice(-800)

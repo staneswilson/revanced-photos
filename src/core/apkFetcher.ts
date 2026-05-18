@@ -18,6 +18,7 @@ const execFileAsync = (cmd: string, args: string[], options?: any) =>
 import { logger } from '../utils/logger.js';
 import { CONFIG } from '../config.js';
 import { mergeXapkToApk } from './xapkMerge.js';
+import { logAbiInventory } from './abiInventory.js';
 
 export class ApkFetchError extends Error {
   constructor(message: string) {
@@ -142,6 +143,7 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
     }
     const downloadedFile = path.join(outDir, apkCandidates[0]!);
     await fs.rename(downloadedFile, outputPath);
+    logAbiInventory(outputPath, 'downloaded APK');
 
     return {
       version,

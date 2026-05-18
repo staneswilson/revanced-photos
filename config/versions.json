@@ -1,8 +1,8 @@
 {
   "gphotos": {
-    "version": "",
-    "updatedAt": "2026-05-09T00:00:00Z",
+    "version": "7.21.0.737764319",
+    "updatedAt": "2026-05-18T00:00:00Z",
     "source": "apkpure",
-    "note": "Empty version = pull latest from APKPure each build. Unlimited storage is gated by device fingerprint (handled by spoof-features), not app version. Set GPHOTOS_VERSION env var to override per build."
+    "note": "Pinned to a 7.x version that predates APKPure's switch to 32-bit-only split-APK uploads. Recent Photos releases on APKPure ship config.armeabi_v7a.apk only — no arm64-v8a — so the merged APK refuses to install on modern 64-bit-only Android devices. Watch [abiInventory] log lines; if arm64-v8a appears, the pin is working."
   }
 }
