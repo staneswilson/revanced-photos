@@ -12,7 +12,8 @@ module.exports = {
     '@typescript-eslint/await-thenable': 'error',
     '@typescript-eslint/no-misused-promises': 'error',
     'security/detect-child-process': 'warn',                 // Intentional — see patcher.ts
-    'security/detect-non-literal-fs-filename': 'warn',
+    // Paths come from frozen CONFIG.paths.* / os.tmpdir(), never user input.
+    'security/detect-non-literal-fs-filename': 'off',
     '@typescript-eslint/no-explicit-any': 'off',
     '@typescript-eslint/no-unsafe-assignment': 'off',
     '@typescript-eslint/no-unsafe-argument': 'off',

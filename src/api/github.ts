@@ -4,12 +4,7 @@ import { logger } from '../utils/logger.js';
 export interface ReleaseAsset {
   name: string;
   downloadUrl: string;
-  /**
-   * SHA-256 of the asset.
-   * Null when sourced from a feed that doesn't publish a hash (e.g. the official
-   * ReVanced v5 API). The orchestrator must skip pre-download verification in
-   * that case and emit a warning.
-   */
+  // Null when the source (e.g. ReVanced v5 API) publishes no hash.
   sha256: string | null;
 }
 
@@ -135,12 +130,7 @@ async function resolveAsset(
   throw new Error(`Could not resolve SHA-256 for ${asset.name}`);
 }
 
-/**
- * Fetches the latest patches bundle from the official ReVanced API as a
- * fallback for when GitHub releases are inaccessible (e.g. HTTP 451 from a
- * DMCA takedown). The v5 API does not expose a SHA-256 hash — the asset is
- * GPG-signed instead — so the returned ReleaseAsset has sha256: null.
- */
+// Fallback when GitHub returns 451 for revanced-patches. No SHA-256 in this feed.
 async function fetchPatchesFromRevancedApi(): Promise<ReleaseAsset> {
   logger.info(`[github] Falling back to official ReVanced API: ${REVANCED_API_PATCHES_URL}`);
   const response = await fetchWithRetry(REVANCED_API_PATCHES_URL, {
@@ -158,7 +148,10 @@ async function fetchPatchesFromRevancedApi(): Promise<ReleaseAsset> {
   };
 }
 
-export async function fetchLatestReVancedRelease(org: string, repo: string): Promise<ReVancedRelease> {
+export async function fetchLatestReVancedRelease(
+  org: string,
+  repo: string,
+): Promise<ReVancedRelease> {
   // CLI v6 ships everything in one repo: revanced-cli
   // Patches are now `.rvp` bundles from revanced-patches (separate repo, same pattern)
   logger.info(`[github] Fetching CLI release from ${org}/${repo}...`);
@@ -239,7 +232,11 @@ export async function fetchLatestReVancedRelease(org: string, repo: string): Pro
         }
       : undefined;
 
-    integrations = await resolveAsset('revanced-integrations', integrationsRelease.assets, fetchIntegrationFallback);
+    integrations = await resolveAsset(
+      'revanced-integrations',
+      integrationsRelease.assets,
+      fetchIntegrationFallback,
+    );
     logger.info(`[github] Integrations: ${integrations.name}`);
   } catch {
     logger.info(`[github] No integrations found (expected for CLI v6+, skipping)`);

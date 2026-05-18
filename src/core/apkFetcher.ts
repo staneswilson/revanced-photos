@@ -2,18 +2,22 @@ import { execFile as execFileOriginal } from 'child_process';
 import path from 'path';
 import fs from 'fs/promises';
 
-const execFileAsync = (cmd: string, args: string[], options?: any) => new Promise<{stdout: string, stderr: string}>((resolve, reject) => {
-  execFileOriginal(cmd, args, options || {}, (err, stdout, stderr) => {
-    if (err) {
-      (err as any).stdout = stdout;
-      (err as any).stderr = stderr;
-      return reject(err instanceof Error ? err : new Error((err as any).message || 'Unknown Error'));
-    }
-    resolve({ stdout: String(stdout), stderr: String(stderr) });
+const execFileAsync = (cmd: string, args: string[], options?: any) =>
+  new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    execFileOriginal(cmd, args, options || {}, (err, stdout, stderr) => {
+      if (err) {
+        (err as any).stdout = stdout;
+        (err as any).stderr = stderr;
+        return reject(
+          err instanceof Error ? err : new Error((err as any).message || 'Unknown Error'),
+        );
+      }
+      resolve({ stdout: String(stdout), stderr: String(stderr) });
+    });
   });
-});
 import { logger } from '../utils/logger.js';
 import { CONFIG } from '../config.js';
+import { mergeXapkToApk } from './xapkMerge.js';
 
 export class ApkFetchError extends Error {
   constructor(message: string) {
@@ -28,19 +32,16 @@ export interface ApkFetchResult {
   outputPath: string;
 }
 
-/**
- * Queries apkeep for the version listing of the configured package and
- * returns the latest 4-segment version. apkeep prints the listing in
- * oldest→newest order on a single comma-separated line, so the last match is
- * the most recent. Returns null on any failure (caller decides how to react).
- */
+// apkeep -l output lists versions oldest→newest, so the last match is current.
 async function resolveLatestVersion(listingDir: string): Promise<string | null> {
   logger.info(`[apkFetcher] No version pin set; querying APKPure for latest...`);
   try {
     const { stdout } = await execFileAsync('apkeep', [
       '-l',
-      '-a', CONFIG.packageName,
-      '-d', 'apk-pure',
+      '-a',
+      CONFIG.packageName,
+      '-d',
+      'apk-pure',
       listingDir,
     ]);
     const matches = stdout.match(/\d+\.\d+\.\d+\.\d+/g);
@@ -78,19 +79,14 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
 
   const outDir = path.dirname(outputPath);
 
-  // No pin → resolve the current latest before downloading so the version is
-  // known to the rest of the pipeline (release tag, meta.json, notes).
+  // Resolve latest before download so the release tag isn't "unknown".
   if (!versionPin) {
     versionPin = (await resolveLatestVersion(outDir)) ?? undefined;
   }
 
   const packageNameArg = versionPin ? `${CONFIG.packageName}@${versionPin}` : CONFIG.packageName;
 
-  const args = [
-    '-a', packageNameArg,
-    '-d', 'apk-pure',
-    outDir,
-  ];
+  const args = ['-a', packageNameArg, '-d', 'apk-pure', outDir];
 
   logger.info(`[apkFetcher] Running apkeep with args: ${args.join(' ')}`);
 
@@ -98,40 +94,40 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
     // apkeep must be in PATH
     const { stdout, stderr } = await execFileAsync('apkeep', args);
 
-    // Prefer the explicit pin: the stdout regex `[0-9.]+` would truncate a
-    // 4-segment version (e.g. `7.75.0.911466973`) to the 3-segment marketing
-    // form if apkeep prints that variant.
+    // Prefer the pin; stdout regex would truncate "7.75.0.911466973" to "7.75.0".
     let version = versionPin || 'unknown';
     if (!versionPin) {
       const match = stdout.match(/Downloading .*? ([0-9.]+)/i);
       if (match && match[1]) {
         version = match[1];
       } else {
-        logger.warn(`[apkFetcher] Could not parse version from apkeep stdout: ${stdout.substring(0, 200)}`);
+        logger.warn(
+          `[apkFetcher] Could not parse version from apkeep stdout: ${stdout.substring(0, 200)}`,
+        );
         if (stderr) logger.warn(`[apkFetcher] apkeep stderr: ${stderr.substring(0, 500)}`);
       }
     }
 
-    // apkeep's output layout has changed across versions: older builds wrote
-    // "<package>.apk" flat in outDir, newer ones write "<package>@<ver>.apk"
-    // or nest the file inside a "<package>/" subdirectory. Scan recursively.
-    const allEntries = (await fs.readdir(outDir, { recursive: true })) as string[];
+    // Filename varies across apkeep versions ("<pkg>.apk", "<pkg>@<v>.apk", or nested).
+    const allEntries = await fs.readdir(outDir, { recursive: true });
     const apkCandidates = allEntries.filter((rel) => {
       const base = path.basename(rel);
       return base.startsWith(CONFIG.packageName) && base.toLowerCase().endsWith('.apk');
     });
     if (apkCandidates.length === 0) {
-      const xapk = allEntries.find((rel) =>
-        path.basename(rel).startsWith(CONFIG.packageName) &&
-        path.basename(rel).toLowerCase().endsWith('.xapk'),
+      // Photos ships split APKs → apkeep emits an XAPK; merge to one universal APK.
+      const xapk = allEntries.find(
+        (rel) =>
+          path.basename(rel).startsWith(CONFIG.packageName) &&
+          path.basename(rel).toLowerCase().endsWith('.xapk'),
       );
       if (xapk) {
-        throw new ApkFetchError(
-          `apkeep produced an XAPK (${xapk}) — split-APK bundles are not supported by this pipeline`,
-        );
+        const xapkAbsPath = path.join(outDir, xapk);
+        logger.info(`[apkFetcher] Detected XAPK ${xapk}; merging splits to single APK...`);
+        await mergeXapkToApk(xapkAbsPath, outputPath);
+        return { version, source: 'apkpure', outputPath };
       }
-      // apkeep 0.17.0 silently exits 0 with empty stdout/stderr when the
-      // pinned version doesn't exist on APKPure. Surface that hypothesis.
+      // apkeep 0.17.0 silently exits 0 when the pinned version doesn't exist on APKPure.
       const hint = versionPin
         ? `\nLikely cause: pinned version "${versionPin}" does not exist on APKPure. Run \`apkeep -l -a ${CONFIG.packageName} -d apk-pure <outdir>\` to list available versions.`
         : '';
@@ -153,7 +149,9 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
       outputPath,
     };
   } catch (error: any) {
-    const stderrContent = error.stderr ? error.stderr.substring(error.stderr.length - 500) : String(error);
+    const stderrContent = error.stderr
+      ? error.stderr.substring(error.stderr.length - 500)
+      : String(error);
     throw new ApkFetchError(`apkeep failed: ${stderrContent}`);
   }
 }

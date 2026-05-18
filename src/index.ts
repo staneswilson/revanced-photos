@@ -17,7 +17,6 @@ import { recolorLauncherIcons } from './core/iconRecolor.js';
 
 async function calculateFileSha256(filePath: string): Promise<string> {
   const hash = crypto.createHash('sha256');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   const readStream = fsSync.createReadStream(filePath);
   await pipeline(readStream, hash);
   return hash.digest('hex');
@@ -25,7 +24,6 @@ async function calculateFileSha256(filePath: string): Promise<string> {
 
 async function writeReleaseMeta(data: any): Promise<void> {
   const metaPath = CONFIG.paths.releaseMeta;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.writeFile(metaPath, JSON.stringify(data.meta, null, 2));
 
   const notesPath = CONFIG.paths.releaseNotes;
@@ -57,16 +55,13 @@ async function writeReleaseMeta(data: any): Promise<void> {
   notes += `1. Flash the provided \`.zip\` module in Magisk/KernelSU.\n`;
   notes += `2. Reboot. Google Photos will be replaced at the system level.\n`;
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.writeFile(notesPath, notes);
 }
 
 async function main() {
   try {
     // Step 1 — Prepare workspace
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.mkdir(CONFIG.paths.workspace, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.mkdir(CONFIG.paths.toolsDir, { recursive: true });
 
     // Step 2 — Fetch ReVanced release metadata
@@ -93,11 +88,7 @@ async function main() {
       );
     }
 
-    // Step 4 — Verify all tool checksums.
-    // sha256 may be null when an asset comes from a feed that doesn't publish a
-    // hash (e.g. the ReVanced v5 API used as a 451 fallback). In that case we
-    // skip pre-download verification — TLS to the official source is the only
-    // integrity guarantee — and warn loudly so it's visible in CI logs.
+    // Step 4 — Verify checksums. sha256 may be null for the v5 API fallback (no hash published).
     const skipReason = (label: string) =>
       `[orchestrator] No SHA-256 published for ${label}; skipping pre-download verification (asset trusted via TLS to official source)`;
 
@@ -118,10 +109,7 @@ async function main() {
     const apkResult = await fetchGPhotosApk(CONFIG.paths.inputApk);
     logger.info(`[orchestrator] Google Photos ${apkResult.version} downloaded`);
 
-    // Step 5b — Recolor launcher icons (cosmetic; runs BEFORE the patcher so
-    // the CLI's existing zipalign pass cleans up any alignment shift our zip
-    // rewrite introduces). Skippable via SKIP_ICON_RECOLOR=true; per-entry
-    // failures are non-fatal and logged inside recolorLauncherIcons.
+    // Step 5b — Recolor icons before patching so the CLI's zipalign cleans up any shift.
     if (process.env[CONFIG.envKeys.skipIconRecolor] === 'true') {
       logger.info('[orchestrator] SKIP_ICON_RECOLOR=true — keeping stock launcher icon colors');
     } else {
@@ -138,7 +126,7 @@ async function main() {
     }
 
     // Step 6 — Build patch configuration
-    const patchConfig = await buildPatchConfig(cliPath, patchesPath, CONFIG.paths.workspace);
+    const patchConfig = await buildPatchConfig(cliPath, patchesPath);
     logger.info(
       `[orchestrator] Patch config built: ${patchConfig.appliedPatches.map((p: any) => p.name).join(', ')}`,
     );

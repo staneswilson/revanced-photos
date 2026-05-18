@@ -8,13 +8,14 @@ This guide covers everything needed to run the pipeline **locally** (Windows) or
 
 Make sure the following tools are installed and available in your `PATH`:
 
-| Tool                    | Version | Install                              |
-| ----------------------- | ------- | ------------------------------------ |
-| Node.js                 | ≥ 20    | [nodejs.org](https://nodejs.org)     |
-| pnpm                    | ≥ 8     | `npm i -g pnpm`                      |
-| Java (JDK)              | ≥ 17    | [adoptium.net](https://adoptium.net) |
-| Android SDK Build-Tools | 34.x    | via Android Studio SDK Manager       |
-| apkeep                  | 0.17.0  | See below                            |
+| Tool                    | Version | Install                                                    |
+| ----------------------- | ------- | ---------------------------------------------------------- |
+| Node.js                 | ≥ 20    | [nodejs.org](https://nodejs.org)                           |
+| pnpm                    | ≥ 8     | `npm i -g pnpm`                                            |
+| Java (JDK)              | ≥ 17    | [adoptium.net](https://adoptium.net)                       |
+| Android SDK Build-Tools | 34.x    | via Android Studio SDK Manager                             |
+| apkeep                  | 0.17.0  | See below                                                  |
+| APKEditor               | 1.4.8   | See below — required when Photos ships as a split-APK XAPK |
 
 ### Install `apkeep` (Windows)
 
@@ -27,6 +28,21 @@ Invoke-WebRequest -Uri "https://github.com/EFForg/apkeep/releases/download/$vers
 # Move to a folder in PATH, e.g.:
 Move-Item apkeep.exe "C:\Windows\System32\apkeep.exe"
 ```
+
+### Install APKEditor (Windows)
+
+```powershell
+$version = "1.4.8"
+$sha256 = "026906af28497577496a3e1f5054a878a7cf9c1b3889626882d87ea88d09c20f"
+Invoke-WebRequest -Uri "https://github.com/REAndroid/APKEditor/releases/download/V$version/APKEditor-$version.jar" -OutFile "APKEditor.jar"
+# Verify hash
+(Get-FileHash APKEditor.jar -Algorithm SHA256).Hash.ToLower()   # must match $sha256
+# Move to a stable location and export the env var:
+Move-Item APKEditor.jar "$env:USERPROFILE\APKEditor.jar"
+[System.Environment]::SetEnvironmentVariable('APKEDITOR_JAR', "$env:USERPROFILE\APKEditor.jar", 'User')
+```
+
+The pipeline only invokes APKEditor when apkeep produces an XAPK (split-APK bundle), which is how Photos now ships on APKPure. If `APKEDITOR_JAR` is unset and an XAPK is encountered, the build fails with a clear error pointing here.
 
 ### Verify `apksigner` is on PATH
 
@@ -96,6 +112,9 @@ KEY_PASS=changeme
 # GPHOTOS_VERSION=7.75.0.911466973
 # SKIP_MAGISK=true
 # SKIP_ICON_RECOLOR=true
+
+# Required only if Photos ships as an XAPK (the pipeline auto-detects). Absolute path to APKEditor.jar.
+# APKEDITOR_JAR=C:\Users\you\APKEditor.jar
 ```
 
 > **About `GPHOTOS_VERSION`.** This is _optional_. When unset (and `config/versions.json` has an empty `gphotos.version`), the orchestrator runs `apkeep -l` first to read APKPure's current latest 4-segment version of `com.google.android.apps.photos` and uses it for the build. Pin a value here only if you want to lock to a specific Photos build — and use the full 4-segment APKPure version (e.g. `7.75.0.911466973`), not the 3-segment marketing version (`7.75.0`), which APKPure does not recognize as an exact match.
@@ -170,5 +189,7 @@ Then trigger the pipeline manually:
 | `Missing required patch 'Spoof features'` or `'GmsCore support'`             | ReVanced renamed these patches in v6 (capitalized, with spaces). Check [revanced-patches releases](https://github.com/ReVanced/revanced-patches/releases) for further drift.                                                                                                                                 |
 | `Failed to fetch release for revanced-patches: HTTP 451`                     | Expected — the pipeline auto-falls back to `https://api.revanced.app/v5/patches`. Should not abort the build; if it does, check that your runner can reach `api.revanced.app`.                                                                                                                               |
 | `[iconRecolor] No launcher icons were recolored`                             | Photos shifted its resource layout under `res/mipmap-*` or `res/drawable-*`. Cosmetic only — the build continues with the stock colored icon. Inspect the patched APK's `res/` tree (e.g. `unzip -l workspace/output-patched.apk \| grep ic_launcher`) and update the patterns in `src/core/iconRecolor.ts`. |
+| `APKEDITOR_JAR env var is not set`                                           | apkeep produced an XAPK (Photos now ships split APKs) and the pipeline needs APKEditor to merge them. Install APKEditor per the Prerequisites table and set `APKEDITOR_JAR` to the jar's absolute path. CI installs it automatically.                                                                        |
+| `APKEditor merge failed: ...`                                                | The merge step ran but APKEditor rejected the input. Usually a malformed/partial XAPK download — delete `workspace/com.google.android.apps.photos@*.xapk` and re-run. If it persists, run `java -jar $APKEDITOR_JAR m -i <the-xapk> -o /tmp/merged.apk -f` manually to capture the full stderr.              |
 | `HTTP 403` from GitHub API                                                   | Your `GITHUB_TOKEN` is invalid or expired                                                                                                                                                                                                                                                                    |
 | `Signature verification failed`                                              | Keystore alias/password mismatch — regenerate with correct values                                                                                                                                                                                                                                            |

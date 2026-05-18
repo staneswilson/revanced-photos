@@ -2,7 +2,7 @@ name: build-and-release
 
 on:
   schedule:
-    - cron: '0 2 * * 0'     # Sunday 02:00 UTC
+    - cron: '0 2 * * 0' # Sunday 02:00 UTC
   workflow_dispatch:
     inputs:
       force_release:
@@ -45,6 +45,15 @@ jobs:
           chmod +x apkeep
           sudo mv apkeep /usr/local/bin/apkeep
 
+      - name: Install APKEditor (for merging XAPK split bundles)
+        run: |
+          APKEDITOR_VERSION="1.4.8"
+          APKEDITOR_SHA256="026906af28497577496a3e1f5054a878a7cf9c1b3889626882d87ea88d09c20f"
+          curl -fsSL -o APKEditor.jar "https://github.com/REAndroid/APKEditor/releases/download/V${APKEDITOR_VERSION}/APKEditor-${APKEDITOR_VERSION}.jar"
+          echo "${APKEDITOR_SHA256}  APKEditor.jar" | sha256sum -c - || exit 1
+          sudo mv APKEditor.jar /usr/local/lib/APKEditor.jar
+          echo "APKEDITOR_JAR=/usr/local/lib/APKEditor.jar" >> "$GITHUB_ENV"
+
       - uses: pnpm/action-setup@v4
         with: { version: 9 }
 
@@ -60,11 +69,11 @@ jobs:
 
       - name: Run ReVanced pipeline
         env:
-          GITHUB_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEY_ALIAS:       ${{ secrets.KEY_ALIAS }}
-          KEY_STORE_PASS:  ${{ secrets.KEY_STORE_PASS }}
-          KEY_PASS:        ${{ secrets.KEY_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_STORE_PASS: ${{ secrets.KEY_STORE_PASS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
         run: node dist/index.js
 
       - uses: actions/upload-artifact@v4

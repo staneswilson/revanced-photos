@@ -28,20 +28,22 @@ vi.mock('child_process', () => ({
 
 describe('patchConfig', () => {
   it('should resolve required v6 patches and emit -e enable flags', async () => {
-    const config = await buildPatchConfig('cli.jar', 'patches.rvp', '/workspace');
+    const config = await buildPatchConfig('cli.jar', 'patches.rvp');
 
     expect(config.enableFlags).toEqual(['-e', 'Spoof features', '-e', 'GmsCore support']);
     expect(config.appliedPatches.map((p) => p.name)).toEqual(['Spoof features', 'GmsCore support']);
   });
 
   it('should invoke list-patches with v6 syntax (-p, -b, --filter-package-name)', async () => {
-    await buildPatchConfig('cli.jar', 'patches.rvp', '/workspace');
+    await buildPatchConfig('cli.jar', 'patches.rvp');
     expect(child_process.execFile).toHaveBeenCalledWith(
       'java',
       [
-        '-jar', 'cli.jar',
+        '-jar',
+        'cli.jar',
         'list-patches',
-        '-p', 'patches.rvp',
+        '-p',
+        'patches.rvp',
         '-b',
         '--filter-package-name=com.google.android.apps.photos',
         '--packages',
@@ -52,10 +54,14 @@ describe('patchConfig', () => {
   });
 
   it('should throw PatchResolutionError when a required patch is absent', async () => {
-    vi.mocked(child_process.execFile).mockImplementationOnce((cmd, args, options, callback: any) => {
-      callback(null, 'Index: 0\nName: Some unrelated patch\n', '');
-    });
+    vi.mocked(child_process.execFile).mockImplementationOnce(
+      (cmd, args, options, callback: any) => {
+        callback(null, 'Index: 0\nName: Some unrelated patch\n', '');
+      },
+    );
 
-    await expect(buildPatchConfig('cli.jar', 'patches.rvp', '/workspace')).rejects.toThrowError(PatchResolutionError);
+    await expect(buildPatchConfig('cli.jar', 'patches.rvp')).rejects.toThrowError(
+      PatchResolutionError,
+    );
   });
 });

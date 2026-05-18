@@ -38,5 +38,6 @@ export const CONFIG = Object.freeze({
     gphotosVersion: 'GPHOTOS_VERSION', // Optional — pin a specific version
     skipMagisk: 'SKIP_MAGISK', // Optional — set 'true' to skip
     skipIconRecolor: 'SKIP_ICON_RECOLOR', // Optional — set 'true' to keep stock icon
+    apkeditorJar: 'APKEDITOR_JAR', // Required only when apkeep yields an XAPK
   },
 });

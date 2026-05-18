@@ -38,7 +38,6 @@ describe('iconRecolor', () => {
 
   afterEach(async () => {
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.unlink(tempApkPath);
     } catch {
       // already gone

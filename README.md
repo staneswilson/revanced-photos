@@ -18,7 +18,7 @@ The patched APK ships with a **grayscaled launcher icon** so it's visually disti
 
 ## How it works
 
-1. **Resolve version** — `apkeep -l` queries APKPure for the current latest 4-segment version of `com.google.android.apps.photos`. Override per build with the `GPHOTOS_VERSION` env var, or pin via `config/versions.json`.
+1. **Resolve version** — `apkeep -l` queries APKPure for the current latest 4-segment version of `com.google.android.apps.photos`. Override per build with the `GPHOTOS_VERSION` env var, or pin via `config/versions.json`. If APKPure returns an XAPK split-bundle (Photos now does), [APKEditor](https://github.com/REAndroid/APKEditor) is invoked to merge the splits into a single universal APK before patching.
 2. **Fetch tooling** — ReVanced CLI v6 from `github.com/ReVanced/revanced-cli` (SHA-256 verified via the asset `digest` field). Patches RVP from `github.com/ReVanced/revanced-patches`, with automatic fallback to `https://api.revanced.app/v5/patches` when GitHub returns HTTP 451.
 3. **Patch** — `revanced-cli patch -p patches.rvp -b -e "Spoof features" -e "GmsCore support" -o output.apk input.apk`. The `Spoof features` patch defaults to enabling `NEXUS_PRELOAD` (Pixel XL) and disabling all newer Pixel features — exactly the unlimited-storage configuration.
 4. **Sign + package** — `apksigner` re-signs with your keystore (Base64-injected via GitHub Secrets, written 0o600, secure-wiped after use). The signed APK is then bundled into a Magisk module via `archiver`.
