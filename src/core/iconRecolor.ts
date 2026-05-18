@@ -8,8 +8,12 @@ export interface IconRecolorResult {
   skipped: number;
 }
 
+// Photos names launcher icons `adaptiveproduct_*_foreground_*` (adaptive icon
+// bitmap foreground used on Android 8+) and `product_logo_*_launcher_*` (the
+// raster fallback for Android <8 and the round-icon variant). The generic
+// `ic_launcher*` pattern stays for forks that target other apps.
 const ICON_PATTERNS: readonly RegExp[] = [
-  /^res\/mipmap-[^/]+\/ic_launcher.*\.(png|webp)$/i,
+  /^res\/mipmap-[^/]+\/(ic_launcher|adaptiveproduct.*_foreground|product_logo.*_launcher).*\.(png|webp)$/i,
   /^res\/drawable-[^/]+\/ic_launcher_foreground.*\.(png|webp)$/i,
 ];
 
@@ -67,8 +71,12 @@ export async function recolorLauncherIcons(apkPath: string): Promise<IconRecolor
       `[iconRecolor] Wrote ${result.recolored} recolored icon(s) back to ${apkPath} (scanned ${result.scanned}, skipped ${result.skipped})`,
     );
   } else {
+    // Dump every entry whose path mentions "launcher" so the next CI run shows what's there.
+    const candidates = entries
+      .filter((e) => !e.isDirectory && e.entryName.toLowerCase().includes('launcher'))
+      .map((e) => e.entryName);
     logger.warn(
-      `[iconRecolor] No launcher icons were recolored. Photos resource layout may have shifted; recolor step is cosmetic and skipped.`,
+      `[iconRecolor] No launcher icons matched. Entries containing "launcher" (first 30): ${candidates.slice(0, 30).join(', ') || '(none)'}`,
     );
   }
 

@@ -77,6 +77,23 @@ describe('iconRecolor', () => {
     expect(result.recolored).toBe(3);
   });
 
+  it('matches Google Photos launcher icon names (adaptiveproduct_* and product_logo_*_launcher_*)', async () => {
+    const colorPng = await makeColorPng();
+    const zip = new AdmZip();
+    zip.addFile('res/mipmap-xxhdpi/adaptiveproduct_photos_2025_foreground_color_108.png', colorPng);
+    zip.addFile('res/mipmap-xxhdpi/product_logo_photos_2025_launcher_color_48.png', colorPng);
+    zip.addFile('res/mipmap-xxhdpi/product_logo_photos_2025_round_launcher_color_48.png', colorPng);
+    zip.addFile(
+      'res/mipmap-v26/photos_launchericon_release_adaptive.xml',
+      Buffer.from('<adaptive-icon/>'),
+    );
+    zip.writeZip(tempApkPath);
+
+    const result = await recolorLauncherIcons(tempApkPath);
+    expect(result.scanned).toBe(3);
+    expect(result.recolored).toBe(3);
+  });
+
   it('warns and returns zeros when no launcher icons are present (does not throw)', async () => {
     const zip = new AdmZip();
     zip.addFile('res/values/strings.xml', Buffer.from('<resources/>'));
