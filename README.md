@@ -18,7 +18,7 @@ The patched APK ships with a **grayscaled launcher icon** so it's visually disti
 
 ## How it works
 
-1. **Resolve version** — `apkeep -l` queries APKPure for the current latest 4-segment version of `com.google.android.apps.photos`. Override per build with the `GPHOTOS_VERSION` env var, or pin via `config/versions.json`. If APKPure returns an XAPK split-bundle (Photos now does), [APKEditor](https://github.com/REAndroid/APKEditor) is invoked to merge the splits into a single universal APK before patching.
+1. **Resolve version + fetch APK** — by default the pipeline scrapes [APKMirror](https://www.apkmirror.com/apk/google-inc/photos/) for the latest Photos release and downloads its **Universal** variant (all ABIs in one file). APKMirror is preferred because APKPure now ships 32-bit-only split bundles for recent versions, which won't install on 64-bit-only Android (Pixel 7+). If APKMirror is unreachable (Cloudflare 403, page redesign), the pipeline automatically falls back to APKPure via `apkeep`, merging any XAPK splits with [APKEditor](https://github.com/REAndroid/APKEditor). Override the version with `GPHOTOS_VERSION` (accepts 3-segment `7.76.0` or 4-segment `7.76.0.913939682`). Force a specific source with `APK_SOURCE=apkmirror` (default) or `APK_SOURCE=apkpure`.
 2. **Fetch tooling** — ReVanced CLI v6 from `github.com/ReVanced/revanced-cli` (SHA-256 verified via the asset `digest` field). Patches RVP from `github.com/ReVanced/revanced-patches`, with automatic fallback to `https://api.revanced.app/v5/patches` when GitHub returns HTTP 451.
 3. **Patch** — `revanced-cli patch -p patches.rvp -b -e "Spoof features" -e "GmsCore support" -o output.apk input.apk`. The `Spoof features` patch defaults to enabling `NEXUS_PRELOAD` (Pixel XL) and disabling all newer Pixel features — exactly the unlimited-storage configuration.
 4. **Sign + package** — `apksigner` re-signs with your keystore (Base64-injected via GitHub Secrets, written 0o600, secure-wiped after use). The signed APK is then bundled into a Magisk module via `archiver`.
@@ -44,9 +44,10 @@ Detailed setup (including local builds): [SETUP.md](SETUP.md).
 
 ### Rooted devices (Magisk / KernelSU module)
 
-1. Download `magisk-revanced-gphotos.zip` from the [latest release](https://github.com/staneswilson/revanced-photos/releases/latest).
-2. Magisk → Modules → Install from storage → select the zip.
-3. Reboot. The patched app replaces the stock Google Photos at the system level.
+1. Install [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases). **Still required on rooted devices** — the `GmsCore support` patch routes the app's Play Services calls to GmsCore regardless of root. Without it the app errors out with "GMS Core is not installed."
+2. Download `magisk-revanced-gphotos.zip` from the [latest release](https://github.com/staneswilson/revanced-photos/releases/latest).
+3. Magisk → Modules → Install from storage → select the zip.
+4. Reboot. The patched app replaces the stock Google Photos at the system level.
 
 ## Security properties
 
@@ -65,6 +66,9 @@ Google grandfathered unlimited original-quality Photos backups for the original 
 
 **Do I need root?**
 No. The signed APK + [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases) path works on stock Android. Root is optional and unlocks the Magisk module path, which seamlessly replaces the system Google Photos.
+
+**Why APKMirror instead of APKPure?**
+APKPure now uploads recent Google Photos as split-APK bundles that contain only `config.armeabi_v7a.apk` — there is no `arm64-v8a` native library inside, so the merged APK refuses to install on 64-bit-only Android (Pixel 7 and newer, recent flagships). APKMirror still ships true universal APKs (all ABIs in one file), so it produces a build that installs everywhere. The pipeline keeps APKPure as an automatic fallback in case APKMirror blocks the CI runner.
 
 **Will Google block this eventually?**
 Possibly. Google has progressively tightened device attestation for some services. The project is best-effort — when ReVanced patches are updated to handle Google's changes, the next weekly build picks them up automatically.

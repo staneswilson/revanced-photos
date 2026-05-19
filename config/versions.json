@@ -1,8 +1,8 @@
 {
   "gphotos": {
-    "version": "7.21.0.737764319",
-    "updatedAt": "2026-05-18T00:00:00Z",
-    "source": "apkpure",
-    "note": "Pinned to a 7.x version that predates APKPure's switch to 32-bit-only split-APK uploads. Recent Photos releases on APKPure ship config.armeabi_v7a.apk only — no arm64-v8a — so the merged APK refuses to install on modern 64-bit-only Android devices. Watch [abiInventory] log lines; if arm64-v8a appears, the pin is working."
+    "version": "",
+    "updatedAt": "2026-05-19T00:00:00Z",
+    "source": "apkmirror",
+    "note": "Empty = the pipeline auto-resolves the latest Photos release from APKMirror. APKMirror ships true universal APKs (all ABIs in one file), so the previous 7.21 pin is no longer required for 64-bit-only devices. If APKMirror is unreachable the pipeline falls back to APKPure automatically. To force a specific version, set GPHOTOS_VERSION in the environment (accepts 3-segment `7.76.0` or 4-segment `7.76.0.913939682`). To force the APKPure path entirely, set APK_SOURCE=apkpure — in that case, pin a 7.21.x universal version here to avoid APKPure's 32-bit-only modern splits."
   }
 }

@@ -22,6 +22,7 @@
   "dependencies": {
     "adm-zip": "^0.5.17",
     "archiver": "^7.0.1",
+    "cheerio": "^1.2.0",
     "sharp": "^0.34.5",
     "zod": "^4.4.3"
   },

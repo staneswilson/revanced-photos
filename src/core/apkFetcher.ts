@@ -19,6 +19,7 @@ import { logger } from '../utils/logger.js';
 import { CONFIG } from '../config.js';
 import { mergeXapkToApk } from './xapkMerge.js';
 import { logAbiInventory } from './abiInventory.js';
+import { fetchPhotosFromApkMirror, ApkMirrorError } from './apkmirrorFetcher.js';
 
 export class ApkFetchError extends Error {
   constructor(message: string) {
@@ -29,7 +30,7 @@ export class ApkFetchError extends Error {
 
 export interface ApkFetchResult {
   version: string;
-  source: 'apkpure' | 'google-play';
+  source: 'apkpure' | 'google-play' | 'apkmirror';
   outputPath: string;
 }
 
@@ -67,7 +68,7 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
       const versionsJsonPath = path.resolve(process.cwd(), 'config', 'versions.json');
       const versionsData = await fs.readFile(versionsJsonPath, 'utf-8');
       const parsed = JSON.parse(versionsData);
-      versionPin = parsed.gphotos?.version;
+      versionPin = parsed.gphotos?.version || undefined;
       if (versionPin) {
         logger.info(`[apkFetcher] Using pinned version ${versionPin} from versions.json`);
       }
@@ -76,6 +77,29 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
     }
   } else {
     logger.info(`[apkFetcher] Using pinned version ${versionPin} from env var`);
+  }
+
+  const source = (process.env[CONFIG.envKeys.apkSource] || 'apkmirror').toLowerCase();
+
+  // APKMirror is the default — it ships true universal APKs (all ABIs in one
+  // file), unlike APKPure which now only carries 32-bit splits for recent
+  // Photos versions. APKPure remains the fallback for: (a) explicit opt-out
+  // via APK_SOURCE=apkpure, and (b) automatic recovery if APKMirror blocks
+  // the CI runner IP or redesigns its pages.
+  if (source !== 'apkpure') {
+    try {
+      const result = await fetchPhotosFromApkMirror(versionPin, outputPath);
+      return { version: result.version, source: 'apkmirror', outputPath: result.outputPath };
+    } catch (err) {
+      if (err instanceof ApkMirrorError) {
+        logger.warn(`[apkFetcher] APKMirror path failed: ${err.message}`);
+        logger.warn(`[apkFetcher] Falling back to APKPure. Set APK_SOURCE=apkpure to silence.`);
+      } else {
+        throw err;
+      }
+    }
+  } else {
+    logger.info(`[apkFetcher] APK_SOURCE=apkpure — skipping APKMirror, using APKPure directly.`);
   }
 
   const outDir = path.dirname(outputPath);

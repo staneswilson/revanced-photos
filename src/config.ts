@@ -39,5 +39,6 @@ export const CONFIG = Object.freeze({
     skipMagisk: 'SKIP_MAGISK', // Optional — set 'true' to skip
     skipIconRecolor: 'SKIP_ICON_RECOLOR', // Optional — set 'true' to keep stock icon
     apkeditorJar: 'APKEDITOR_JAR', // Required only when apkeep yields an XAPK
+    apkSource: 'APK_SOURCE', // Optional — 'apkmirror' (default) or 'apkpure'
   },
 });
