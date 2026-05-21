@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import archiver from 'archiver';
+import AdmZip from 'adm-zip';
 import { logger } from '../utils/logger.js';
 import { CONFIG } from '../config.js';
 
@@ -13,6 +14,30 @@ export interface MagiskModuleOptions {
   moduleId: string;
   moduleVersion: string;
   moduleVersionCode: number;
+}
+
+async function extractNativeLibs(
+  apkPath: string,
+  systemAppDir: string,
+): Promise<{ abis: string[]; totalLibs: number }> {
+  const zip = new AdmZip(apkPath);
+  const abis = new Set<string>();
+  let totalLibs = 0;
+
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) continue;
+    const match = entry.entryName.match(/^lib\/([^/]+)\/(.+\.so)$/);
+    if (!match) continue;
+
+    const [, abi, soName] = match;
+    abis.add(abi!);
+    const destDir = path.join(systemAppDir, 'lib', abi!);
+    await fs.mkdir(destDir, { recursive: true });
+    await fs.writeFile(path.join(destDir, soName!), entry.getData());
+    totalLibs += 1;
+  }
+
+  return { abis: Array.from(abis).sort(), totalLibs };
 }
 
 export async function buildMagiskModule(options: MagiskModuleOptions): Promise<void> {
@@ -27,17 +52,21 @@ export async function buildMagiskModule(options: MagiskModuleOptions): Promise<v
   try {
     const metaInfDir = path.join(tmpDir, 'META-INF', 'com', 'google', 'android');
     const systemAppDir = path.join(tmpDir, 'system', 'priv-app', 'Photos');
-    
+
     await fs.mkdir(metaInfDir, { recursive: true });
     await fs.mkdir(systemAppDir, { recursive: true });
 
-    // update-binary script
     const updateBinaryContent = `#!/sbin/sh
 SKIPUNZIP=1
 unzip -o "$ZIPFILE" 'system/*' -d "$MODPATH"
-set_perm_recursive "$MODPATH/system/priv-app/Photos" root root 0644 0644
+set_perm_recursive "$MODPATH/system/priv-app/Photos" root root 0755 0644
+if [ -d "$MODPATH/system/priv-app/Photos/lib" ]; then
+  find "$MODPATH/system/priv-app/Photos/lib" -name '*.so' -exec chmod 0755 {} \\;
+fi
 `;
-    await fs.writeFile(path.join(metaInfDir, 'update-binary'), updateBinaryContent, { mode: 0o755 });
+    await fs.writeFile(path.join(metaInfDir, 'update-binary'), updateBinaryContent, {
+      mode: 0o755,
+    });
 
     // empty updater-script
     await fs.writeFile(path.join(metaInfDir, 'updater-script'), '');
@@ -53,16 +82,29 @@ updateJson=
 `;
     await fs.writeFile(path.join(tmpDir, 'module.prop'), modulePropContent);
 
-    // copy APK
     const apkDestPath = path.join(systemAppDir, 'Photos.apk');
     await fs.copyFile(options.signedApkPath, apkDestPath);
+
+    const { abis, totalLibs } = await extractNativeLibs(options.signedApkPath, systemAppDir);
+    if (totalLibs === 0) {
+      logger.warn(
+        '[magisk] Signed APK contains no lib/<abi>/*.so entries. If Photos crashes ' +
+          'with UnsatisfiedLinkError, the APK source is missing native code for the ' +
+          "target device's ABI.",
+      );
+    } else {
+      logger.info(
+        `[magisk] Extracted ${totalLibs} native lib(s) into system/priv-app/Photos/lib/ ` +
+          `for ABIs: ${abis.join(', ')}`,
+      );
+    }
 
     // Zip
     logger.info(`[magisk] Creating Magisk zip archive at ${options.outputZipPath}`);
     await new Promise<void>((resolve, reject) => {
       const output = fsSync.createWriteStream(options.outputZipPath);
       const archive = archiver('zip', {
-        zlib: { level: 0 } // Critical: Do not compress APK
+        zlib: { level: 0 }, // Critical: Do not compress APK
       });
 
       output.on('close', () => resolve());

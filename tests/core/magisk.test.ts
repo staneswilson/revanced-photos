@@ -1,77 +1,129 @@
-import { describe, it, expect, vi } from 'vitest';
-import { buildMagiskModule } from '../../src/core/magisk.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import AdmZip from 'adm-zip';
 import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
+import { buildMagiskModule } from '../../src/core/magisk.js';
 import { CONFIG } from '../../src/config.js';
 
-// Mock archiver completely to avoid file system operations
-vi.mock('archiver', () => {
-  return {
-    default: vi.fn(() => ({
-      on: vi.fn(),
-      pipe: vi.fn(),
-      directory: vi.fn(),
-      finalize: vi.fn().mockImplementation(function(this: any) {
-        // Emit 'close' on the mocked write stream manually if possible, or just wait.
-        // We'll mock the createWriteStream returning an object that emits close.
-      }),
-    })),
-  };
-});
-
-import { EventEmitter } from 'events';
-
-vi.mock('fs', () => ({
-  default: {
-    createWriteStream: vi.fn(() => {
-      const stream = new EventEmitter();
-      setTimeout(() => stream.emit('close'), 10);
-      return stream;
-    }),
+function makeFakeApk(apkPath: string, libs: Record<string, string[]> = {}): void {
+  const zip = new AdmZip();
+  zip.addFile('AndroidManifest.xml', Buffer.from('placeholder'));
+  zip.addFile('classes.dex', Buffer.from('dex'));
+  for (const [abi, sos] of Object.entries(libs)) {
+    for (const so of sos) {
+      zip.addFile(`lib/${abi}/${so}`, Buffer.from(`elf-${abi}-${so}`));
+    }
   }
-}));
-
-vi.mock('fs/promises', () => ({
-  default: {
-    mkdir: vi.fn().mockResolvedValue(undefined),
-    writeFile: vi.fn().mockResolvedValue(undefined),
-    copyFile: vi.fn().mockResolvedValue(undefined),
-    rm: vi.fn().mockResolvedValue(undefined),
-  }
-}));
+  zip.writeZip(apkPath);
+}
 
 describe('magisk', () => {
-  it('should generate module.prop and zip successfully', async () => {
-    process.env[CONFIG.envKeys.skipMagisk] = 'false';
+  let workDir: string;
+  let signedApkPath: string;
+  let outputZipPath: string;
 
-    await buildMagiskModule({
-      signedApkPath: 'signed.apk',
-      outputZipPath: 'magisk.zip',
-      moduleId: 'test_module',
-      moduleVersion: '1.0',
-      moduleVersionCode: 1,
-    });
-
-    expect(fs.writeFile).toHaveBeenCalledWith(
-      expect.stringContaining('module.prop'),
-      expect.stringContaining('id=test_module\nname=ReVanced Google Photos')
-    );
-
-    expect(fs.writeFile).toHaveBeenCalledWith(
-      expect.stringContaining('update-binary'),
-      expect.stringContaining('SKIPUNZIP=1\n'),
-      { mode: 0o755 }
-    );
+  beforeEach(async () => {
+    workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'magisk-test-'));
+    signedApkPath = path.join(workDir, 'signed.apk');
+    outputZipPath = path.join(workDir, 'magisk.zip');
+    delete process.env[CONFIG.envKeys.skipMagisk];
   });
 
-  it('should return early if SKIP_MAGISK is true', async () => {
+  afterEach(async () => {
+    await fs.rm(workDir, { recursive: true, force: true });
+  });
+
+  it('returns early without writing a zip when SKIP_MAGISK is true', async () => {
     process.env[CONFIG.envKeys.skipMagisk] = 'true';
+    makeFakeApk(signedApkPath);
+
     await buildMagiskModule({
-      signedApkPath: 'signed.apk',
-      outputZipPath: 'magisk.zip',
+      signedApkPath,
+      outputZipPath,
       moduleId: 'test_module',
       moduleVersion: '1.0',
       moduleVersionCode: 1,
     });
-    // Shouldn't do anything else
+
+    await expect(fs.access(outputZipPath)).rejects.toThrow();
+  });
+
+  it('builds a module containing module.prop, update-binary, and the APK', async () => {
+    makeFakeApk(signedApkPath);
+
+    await buildMagiskModule({
+      signedApkPath,
+      outputZipPath,
+      moduleId: 'test_module',
+      moduleVersion: '1.0',
+      moduleVersionCode: 1,
+    });
+
+    const zip = new AdmZip(outputZipPath);
+    const names = zip.getEntries().map((e) => e.entryName);
+
+    expect(names).toContain('module.prop');
+    expect(names).toContain('META-INF/com/google/android/update-binary');
+    expect(names).toContain('META-INF/com/google/android/updater-script');
+    expect(names).toContain('system/priv-app/Photos/Photos.apk');
+
+    const moduleProp = zip.getEntry('module.prop')!.getData().toString();
+    expect(moduleProp).toContain('id=test_module');
+    expect(moduleProp).toContain('name=ReVanced Google Photos');
+
+    const updateBinary = zip
+      .getEntry('META-INF/com/google/android/update-binary')!
+      .getData()
+      .toString();
+    expect(updateBinary).toContain('SKIPUNZIP=1');
+    expect(updateBinary).toContain('set_perm_recursive');
+  });
+
+  it('extracts native libs from the APK into system/priv-app/Photos/lib/<abi>/', async () => {
+    makeFakeApk(signedApkPath, {
+      'arm64-v8a': ['libnative.so', 'libjni.so'],
+      'armeabi-v7a': ['libnative.so'],
+    });
+
+    await buildMagiskModule({
+      signedApkPath,
+      outputZipPath,
+      moduleId: 'test_module',
+      moduleVersion: '1.0',
+      moduleVersionCode: 1,
+    });
+
+    const zip = new AdmZip(outputZipPath);
+    const names = zip.getEntries().map((e) => e.entryName);
+
+    expect(names).toContain('system/priv-app/Photos/lib/arm64-v8a/libnative.so');
+    expect(names).toContain('system/priv-app/Photos/lib/arm64-v8a/libjni.so');
+    expect(names).toContain('system/priv-app/Photos/lib/armeabi-v7a/libnative.so');
+
+    const extracted = zip
+      .getEntry('system/priv-app/Photos/lib/arm64-v8a/libnative.so')!
+      .getData()
+      .toString();
+    expect(extracted).toBe('elf-arm64-v8a-libnative.so');
+  });
+
+  it('builds successfully and logs a warning when the APK has no native libs', async () => {
+    makeFakeApk(signedApkPath);
+
+    await buildMagiskModule({
+      signedApkPath,
+      outputZipPath,
+      moduleId: 'test_module',
+      moduleVersion: '1.0',
+      moduleVersionCode: 1,
+    });
+
+    const zip = new AdmZip(outputZipPath);
+    const libEntries = zip
+      .getEntries()
+      .filter((e) => e.entryName.startsWith('system/priv-app/Photos/lib/'));
+    expect(libEntries).toHaveLength(0);
+    expect(zip.getEntry('system/priv-app/Photos/Photos.apk')).not.toBeNull();
   });
 });
