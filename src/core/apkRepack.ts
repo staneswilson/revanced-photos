@@ -60,7 +60,7 @@ export async function repackForDirectMmap(options: RepackOptions): Promise<void>
       '-o',
       decompiledDir,
       '-t',
-      'raw',
+      'xml',
       '-f',
     ];
     logger.info(`[apkRepack] Decoding: java ${decodeArgs.join(' ')}`);
@@ -86,7 +86,7 @@ export async function repackForDirectMmap(options: RepackOptions): Promise<void>
       '-o',
       options.outputApkPath,
       '-t',
-      'raw',
+      'xml',
       '-extractNativeLibs',
       'false',
       '-f',

@@ -68,7 +68,8 @@ describe('apkRepack', () => {
     expect(decodeArgs).toContain('-i');
     expect(decodeArgs).toContain('/tmp/patched.apk');
     expect(decodeArgs).toContain('-t');
-    expect(decodeArgs).toContain('raw');
+    const decodeTypeIdx = decodeArgs.indexOf('-t');
+    expect(decodeArgs[decodeTypeIdx + 1]).toBe('xml');
     expect(decodeArgs).toContain('-f');
 
     const buildArgs = calls[1]![1] as string[];
@@ -76,6 +77,8 @@ describe('apkRepack', () => {
     expect(buildArgs).toContain('-extractNativeLibs');
     const flagIdx = buildArgs.indexOf('-extractNativeLibs');
     expect(buildArgs[flagIdx + 1]).toBe('false');
+    const buildTypeIdx = buildArgs.indexOf('-t');
+    expect(buildArgs[buildTypeIdx + 1]).toBe('xml');
     expect(buildArgs).toContain('-o');
     expect(buildArgs[buildArgs.indexOf('-o') + 1]).toBe(tmpOut);
 
