@@ -1,12 +1,14 @@
 import { execFile as execFileOriginal } from 'child_process';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import AdmZip from 'adm-zip';
+import archiver from 'archiver';
 import { logger } from '../utils/logger.js';
-import { CONFIG } from '../config.js';
 import { logAbiInventory } from './abiInventory.js';
+import { inspectExtractNativeLibs, setExtractNativeLibsFalse } from '../utils/axml.js';
 
 const execFileAsync = (cmd: string, args: string[], options?: any) =>
   new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
@@ -34,81 +36,131 @@ export interface RepackOptions {
   outputApkPath: string;
 }
 
+const ZIPALIGN_ENV = 'ZIPALIGN_PATH';
+
+function shouldStoreUncompressed(entryName: string): boolean {
+  if (/^lib\/[^/]+\/.+\.so$/.test(entryName)) return true;
+  if (entryName === 'resources.arsc') return true;
+  return false;
+}
+
 export async function repackForDirectMmap(options: RepackOptions): Promise<void> {
-  const jarPath = process.env[CONFIG.envKeys.apkeditorJar];
-  if (!jarPath) {
+  const inputZip = new AdmZip(options.inputApkPath);
+  const entries = inputZip.getEntries();
+
+  const manifestEntry = entries.find((e) => e.entryName === 'AndroidManifest.xml');
+  if (!manifestEntry) {
+    throw new ApkRepackError(`AndroidManifest.xml not found in ${options.inputApkPath}`);
+  }
+  const originalManifest = manifestEntry.getData();
+
+  let newManifest: Buffer;
+  try {
+    const inspection = inspectExtractNativeLibs(originalManifest);
+    if (inspection.hasExtractNativeLibs && inspection.extractNativeLibsValue === false) {
+      logger.info('[apkRepack] AndroidManifest already has extractNativeLibs="false"');
+      newManifest = originalManifest;
+    } else {
+      newManifest = setExtractNativeLibsFalse(originalManifest);
+      logger.info(
+        `[apkRepack] Patched AndroidManifest extractNativeLibs="false" (${originalManifest.length} → ${newManifest.length} bytes)`,
+      );
+    }
+  } catch (error: any) {
     throw new ApkRepackError(
-      `${CONFIG.envKeys.apkeditorJar} env var is not set. The pipeline needs APKEditor to ` +
-        `re-pack the patched APK with android:extractNativeLibs="false" and uncompressed, ` +
-        `page-aligned native libs so the Magisk system-app install can mmap libnative.so ` +
-        `directly. Download the jar from https://github.com/REAndroid/APKEditor/releases and ` +
-        `set ${CONFIG.envKeys.apkeditorJar} to its absolute path.`,
+      `Failed to edit AndroidManifest.xml: ${error?.message ?? String(error)}`,
     );
   }
 
   const tmpDir = path.join(os.tmpdir(), `apkrepack-${crypto.randomUUID()}`);
-  const decompiledDir = path.join(tmpDir, 'decompiled');
+  const unalignedPath = path.join(tmpDir, 'unaligned.apk');
   await fs.mkdir(tmpDir, { recursive: true });
 
   try {
-    const decodeArgs = [
-      '-jar',
-      jarPath,
-      'd',
-      '-i',
-      options.inputApkPath,
-      '-o',
-      decompiledDir,
-      '-t',
-      'xml',
-      '-f',
-    ];
-    logger.info(`[apkRepack] Decoding: java ${decodeArgs.join(' ')}`);
-    try {
-      const { stdout, stderr } = await execFileAsync('java', decodeArgs, {
-        maxBuffer: 1024 * 1024 * 16,
-      });
-      if (stdout.trim()) logger.info(`[apkRepack] decode stdout: ${stdout.trim().slice(-500)}`);
-      if (stderr.trim()) logger.info(`[apkRepack] decode stderr: ${stderr.trim().slice(-500)}`);
-    } catch (error: any) {
-      const snippet = error?.stderr
-        ? String(error.stderr).slice(-800)
-        : error?.message || String(error);
-      throw new ApkRepackError(`APKEditor decode failed: ${snippet}`);
-    }
+    await writeRepackedZip(entries, manifestEntry, newManifest, unalignedPath);
+    logger.info(`[apkRepack] Wrote unaligned APK to ${unalignedPath}`);
 
-    const buildArgs = [
-      '-jar',
-      jarPath,
-      'b',
-      '-i',
-      decompiledDir,
-      '-o',
-      options.outputApkPath,
-      '-t',
-      'xml',
-      '-extractNativeLibs',
-      'false',
-      '-f',
-    ];
-    logger.info(`[apkRepack] Building: java ${buildArgs.join(' ')}`);
-    try {
-      const { stdout, stderr } = await execFileAsync('java', buildArgs, {
-        maxBuffer: 1024 * 1024 * 16,
-      });
-      if (stdout.trim()) logger.info(`[apkRepack] build stdout: ${stdout.trim().slice(-500)}`);
-      if (stderr.trim()) logger.info(`[apkRepack] build stderr: ${stderr.trim().slice(-500)}`);
-    } catch (error: any) {
-      const snippet = error?.stderr
-        ? String(error.stderr).slice(-800)
-        : error?.message || String(error);
-      throw new ApkRepackError(`APKEditor build failed: ${snippet}`);
-    }
+    await runZipalign(unalignedPath, options.outputApkPath);
+    logger.info(`[apkRepack] zipaligned to ${options.outputApkPath}`);
 
     logAbiInventory(options.outputApkPath, 're-packed APK');
     verifyNativeLibsStored(options.outputApkPath);
+
+    const finalManifest = new AdmZip(options.outputApkPath)
+      .getEntries()
+      .find((e) => e.entryName === 'AndroidManifest.xml');
+    if (finalManifest) {
+      const finalInspection = inspectExtractNativeLibs(finalManifest.getData());
+      if (
+        !finalInspection.hasExtractNativeLibs ||
+        finalInspection.extractNativeLibsValue !== false
+      ) {
+        throw new ApkRepackError(
+          `Re-packed APK manifest does not report extractNativeLibs="false" (has=${finalInspection.hasExtractNativeLibs}, value=${finalInspection.extractNativeLibsValue})`,
+        );
+      }
+      logger.info('[apkRepack] Verified extractNativeLibs="false" in re-packed manifest');
+    }
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function writeRepackedZip(
+  entries: AdmZip.IZipEntry[],
+  manifestEntry: AdmZip.IZipEntry,
+  newManifest: Buffer,
+  outputPath: string,
+): Promise<void> {
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  const output = fsSync.createWriteStream(outputPath);
+  const closed = new Promise<void>((resolve, reject) => {
+    output.on('close', () => resolve());
+    output.on('error', reject);
+    archive.on('error', reject);
+    archive.on('warning', (err) => {
+      if (err.code === 'ENOENT') logger.warn(`[apkRepack] archiver warning: ${err.message}`);
+      else reject(err);
+    });
+  });
+  archive.pipe(output);
+
+  let storedCount = 0;
+  let deflatedCount = 0;
+  for (const entry of entries) {
+    if (entry.isDirectory) continue;
+    if (entry.entryName.startsWith('META-INF/')) continue;
+
+    const data = entry === manifestEntry ? newManifest : entry.getData();
+    const store = shouldStoreUncompressed(entry.entryName);
+    if (store) storedCount++;
+    else deflatedCount++;
+    archive.append(data, { name: entry.entryName, store });
+  }
+
+  await archive.finalize();
+  await closed;
+  logger.info(`[apkRepack] Re-packed ${storedCount} STORED + ${deflatedCount} DEFLATE entries`);
+}
+
+async function runZipalign(inputPath: string, outputPath: string): Promise<void> {
+  const zipalignPath = process.env[ZIPALIGN_ENV] || 'zipalign';
+  const args = ['-p', '-f', '4', inputPath, outputPath];
+  logger.info(`[apkRepack] Running: ${zipalignPath} ${args.join(' ')}`);
+  try {
+    const { stdout, stderr } = await execFileAsync(zipalignPath, args, {
+      maxBuffer: 1024 * 1024 * 16,
+    });
+    if (stdout.trim()) logger.info(`[apkRepack] zipalign stdout: ${stdout.trim().slice(-500)}`);
+    if (stderr.trim()) logger.info(`[apkRepack] zipalign stderr: ${stderr.trim().slice(-500)}`);
+  } catch (error: any) {
+    const snippet = error?.stderr
+      ? String(error.stderr).slice(-800)
+      : error?.message || String(error);
+    throw new ApkRepackError(
+      `zipalign failed (cmd: ${zipalignPath}): ${snippet}. Install Android build-tools and ensure ` +
+        `'zipalign' is on PATH, or set ${ZIPALIGN_ENV} to its absolute path.`,
+    );
   }
 }
 
@@ -134,11 +186,10 @@ export function verifyNativeLibsStored(apkPath: string): void {
       .slice(0, 3)
       .map((o) => `${o.name} (method=${o.method})`)
       .join(', ');
-    logger.warn(
-      `[apkRepack] ${offenders.length}/${total} native libs are still compressed: ${sample}. ` +
-        `Direct mmap will fail at runtime — check APKEditor build flags.`,
+    throw new ApkRepackError(
+      `${offenders.length}/${total} native libs are still compressed: ${sample}. ` +
+        `Direct mmap will fail at runtime.`,
     );
-    return;
   }
   logger.info(`[apkRepack] All ${total} native libs are STORED (method=0) — direct mmap ready`);
 }
