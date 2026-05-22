@@ -23,6 +23,7 @@ export const CONFIG = Object.freeze({
     workspace: 'workspace',
     inputApk: 'workspace/input.apk',
     patchedApk: 'workspace/output-patched.apk',
+    repackedApk: 'workspace/output-repacked.apk',
     signedApk: 'workspace/output-signed.apk',
     magiskZip: 'workspace/magisk-revanced-gphotos.zip',
     releaseMeta: 'workspace/meta.json',

@@ -11,6 +11,7 @@ import { verifySha256 } from './core/verifier.js';
 import { fetchGPhotosApk } from './core/apkFetcher.js';
 import { buildPatchConfig } from './core/patchConfig.js';
 import { runPatcher } from './core/patcher.js';
+import { repackForDirectMmap } from './core/apkRepack.js';
 import { signApk } from './core/signer.js';
 import { buildMagiskModule } from './core/magisk.js';
 import { recolorLauncherIcons } from './core/iconRecolor.js';
@@ -142,8 +143,15 @@ async function main() {
     });
     logger.info('[orchestrator] Patching complete');
 
+    // Step 7b — Re-pack for direct mmap
+    await repackForDirectMmap({
+      inputApkPath: CONFIG.paths.patchedApk,
+      outputApkPath: CONFIG.paths.repackedApk,
+    });
+    logger.info('[orchestrator] Re-pack complete');
+
     // Step 8 — Sign
-    await signApk(CONFIG.paths.patchedApk, CONFIG.paths.signedApk);
+    await signApk(CONFIG.paths.repackedApk, CONFIG.paths.signedApk);
     logger.info('[orchestrator] Signing complete');
 
     // Calculate signed apk hash
