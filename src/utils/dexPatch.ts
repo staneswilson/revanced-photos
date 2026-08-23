@@ -90,6 +90,8 @@ export function patchGmsCoreSupportDex(dexBuffer: Buffer): DexPatchResult {
   const stringIdsOff = dexBuffer.readUInt32LE(60);
   const typeIdsSize = dexBuffer.readUInt32LE(64);
   const typeIdsOff = dexBuffer.readUInt32LE(68);
+  const protoIdsSize = dexBuffer.readUInt32LE(72);
+  const protoIdsOff = dexBuffer.readUInt32LE(76);
   const methodIdsSize = dexBuffer.readUInt32LE(88);
   const methodIdsOff = dexBuffer.readUInt32LE(92);
   const classDefsSize = dexBuffer.readUInt32LE(96);
@@ -99,9 +101,12 @@ export function patchGmsCoreSupportDex(dexBuffer: Buffer): DexPatchResult {
     return { patched: false, patchedMethods: [] };
   }
 
-  // Quick heuristic: Check if target class/method string exists anywhere in the DEX before full parsing
-  const dexString = dexBuffer.toString('utf8');
-  if (!dexString.includes('GmsCoreSupport') && !dexString.includes('checkUpdates')) {
+  // Quick zero-copy heuristic: Check if target class/method string exists anywhere in the DEX before full parsing
+  if (
+    !dexBuffer.includes('GmsCoreSupport') &&
+    !dexBuffer.includes('checkUpdates') &&
+    !dexBuffer.includes('checkGmsCore')
+  ) {
     return { patched: false, patchedMethods: [] };
   }
 
@@ -112,15 +117,25 @@ export function patchGmsCoreSupportDex(dexBuffer: Buffer): DexPatchResult {
     return getDexString(dexBuffer, descriptorIdx, stringIdsOff);
   };
 
-  const getMethodInfo = (methodIdx: number): { className: string; methodName: string } => {
-    if (methodIdx >= methodIdsSize) return { className: '', methodName: '' };
+  const getMethodInfo = (
+    methodIdx: number,
+  ): { className: string; methodName: string; returnType: string } => {
+    if (methodIdx >= methodIdsSize) return { className: '', methodName: '', returnType: '' };
     const off = methodIdsOff + methodIdx * 8;
     const classIdx = dexBuffer.readUInt16LE(off);
+    const protoIdx = dexBuffer.readUInt16LE(off + 2);
     const nameIdx = dexBuffer.readUInt32LE(off + 4);
     const className = getTypeDescriptor(classIdx);
     const methodName =
       nameIdx < stringIdsSize ? getDexString(dexBuffer, nameIdx, stringIdsOff) : '';
-    return { className, methodName };
+
+    let returnType = '';
+    if (protoIdx < protoIdsSize) {
+      const protoOff = protoIdsOff + protoIdx * 12;
+      const returnTypeIdx = dexBuffer.readUInt32LE(protoOff + 4);
+      returnType = getTypeDescriptor(returnTypeIdx);
+    }
+    return { className, methodName, returnType };
   };
 
   let patched = false;
@@ -183,23 +198,31 @@ export function patchGmsCoreSupportDex(dexBuffer: Buffer): DexPatchResult {
 
         if (codeOff.value === 0 || codeOff.value >= dexBuffer.length) continue;
 
-        const { className, methodName } = getMethodInfo(cumulativeMethodIdx);
+        const { className, methodName, returnType } = getMethodInfo(cumulativeMethodIdx);
 
-        // Match checkUpdates method in GmsCoreSupport classes
-        if (
-          methodName === 'checkUpdates' &&
-          (className.includes('GmsCoreSupport') ||
-            className.includes('app/revanced/extension/shared'))
-        ) {
+        // Match checkUpdates, checkGmsCore, check methods in GmsCoreSupport classes
+        const isGmsSupportClass =
+          className.includes('GmsCoreSupport') ||
+          className.includes('app/revanced/extension/shared/GmsCore');
+        const isTargetCheckMethod =
+          methodName === 'checkUpdates' ||
+          methodName === 'checkGmsCore' ||
+          (methodName === 'check' && isGmsSupportClass);
+
+        if (isGmsSupportClass && isTargetCheckMethod) {
           const codeItemOff = codeOff.value;
           const insnsSize = dexBuffer.readUInt32LE(codeItemOff + 12);
-          if (insnsSize > 0 && codeItemOff + 16 <= dexBuffer.length) {
-            // Opcode 0x000E is return-void in Dalvik bytecode
+          // Dalvik opcode 0x000E is return-void, valid for methods with void return descriptor 'V'
+          if (
+            insnsSize > 0 &&
+            codeItemOff + 16 <= dexBuffer.length &&
+            (returnType === 'V' || returnType === '')
+          ) {
             const originalOpcode = dexBuffer.readUInt16LE(codeItemOff + 16);
             if (originalOpcode !== 0x000e) {
               dexBuffer.writeUInt16LE(0x000e, codeItemOff + 16);
               patched = true;
-              const signature = `${className}->${methodName}()V`;
+              const signature = `${className}->${methodName}()${returnType || 'V'}`;
               patchedMethods.push(signature);
               logger.info(
                 `[dexPatch] Neutralized ${signature} with return-void (was 0x${originalOpcode.toString(16).padStart(4, '0')})`,

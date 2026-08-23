@@ -1,6 +1,11 @@
 name: build-and-release
 
 on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
   schedule:
     - cron: '0 2 * * 0' # Sunday 02:00 UTC
   workflow_dispatch:
@@ -88,7 +93,7 @@ jobs:
       - name: Read release metadata
         id: meta
         run: |
-          TAG=$(node -e "import('./workspace/meta.json', {assert:{type:'json'}}).then(m => console.log(m.default.releaseTag))")
+          TAG=$(node -e "const fs = require('fs'); console.log(JSON.parse(fs.readFileSync('./workspace/meta.json', 'utf8')).releaseTag);")
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
 
       - uses: softprops/action-gh-release@v2

@@ -60,6 +60,13 @@ export async function runPatcher(options: PatcherOptions): Promise<void> {
       if (code !== 0) {
         const snippet = stderrContent.substring(stderrContent.length - 500);
         reject(new PatchError(`Patcher exited with code ${code}. Stderr snippet: ${snippet}`));
+      } else if (stderrContent.includes('SEVERE:') || stderrContent.includes('PatchException:')) {
+        const snippet = stderrContent.substring(stderrContent.length - 800);
+        reject(
+          new PatchError(
+            `Patcher encountered internal patch failure on this target APK version: ${snippet}`,
+          ),
+        );
       } else {
         resolve();
       }

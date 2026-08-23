@@ -8,13 +8,30 @@ import { logger } from './utils/logger.js';
 import { fetchLatestReVancedRelease } from './api/github.js';
 import { downloadFile } from './core/downloader.js';
 import { verifySha256 } from './core/verifier.js';
-import { fetchGPhotosApk } from './core/apkFetcher.js';
+import { fetchGPhotosApk, resolveAvailableVersions, ApkFetchResult } from './core/apkFetcher.js';
 import { buildPatchConfig } from './core/patchConfig.js';
 import { runPatcher } from './core/patcher.js';
 import { repackForDirectMmap } from './core/apkRepack.js';
 import { signApk } from './core/signer.js';
 import { buildMagiskModule } from './core/magisk.js';
 import { recolorLauncherIcons } from './core/iconRecolor.js';
+
+async function applyIconRecolorIfEnabled(apkPath: string): Promise<void> {
+  if (process.env[CONFIG.envKeys.skipIconRecolor] === 'true') {
+    logger.info('[orchestrator] SKIP_ICON_RECOLOR=true — keeping stock launcher icon colors');
+    return;
+  }
+  try {
+    const recolorResult = await recolorLauncherIcons(apkPath);
+    logger.info(
+      `[orchestrator] Icon recolor: ${recolorResult.recolored} recolored, ${recolorResult.skipped} skipped, ${recolorResult.scanned} scanned`,
+    );
+  } catch (err: any) {
+    logger.warn(
+      `[orchestrator] Icon recolor failed (continuing with stock icons): ${err?.message || err}`,
+    );
+  }
+}
 
 async function calculateFileSha256(filePath: string): Promise<string> {
   const hash = crypto.createHash('sha256');
@@ -106,42 +123,94 @@ async function main() {
     }
     logger.info('[orchestrator] Tool checksum verification step complete');
 
-    // Step 5 — Fetch base APK
-    const apkResult = await fetchGPhotosApk(CONFIG.paths.inputApk);
-    logger.info(`[orchestrator] Google Photos ${apkResult.version} downloaded`);
-
-    // Step 5b — Recolor icons before patching so the CLI's zipalign cleans up any shift.
-    if (process.env[CONFIG.envKeys.skipIconRecolor] === 'true') {
-      logger.info('[orchestrator] SKIP_ICON_RECOLOR=true — keeping stock launcher icon colors');
-    } else {
-      try {
-        const recolorResult = await recolorLauncherIcons(CONFIG.paths.inputApk);
-        logger.info(
-          `[orchestrator] Icon recolor: ${recolorResult.recolored} recolored, ${recolorResult.skipped} skipped, ${recolorResult.scanned} scanned`,
-        );
-      } catch (err: any) {
-        logger.warn(
-          `[orchestrator] Icon recolor failed (continuing with stock icons): ${err?.message || err}`,
-        );
-      }
-    }
-
-    // Step 6 — Build patch configuration
+    // Step 5 — Build patch configuration
     const patchConfig = await buildPatchConfig(cliPath, patchesPath);
     logger.info(
       `[orchestrator] Patch config built: ${patchConfig.appliedPatches.map((p: any) => p.name).join(', ')}`,
     );
 
-    // Step 7 — Patch
-    await runPatcher({
-      inputApkPath: CONFIG.paths.inputApk,
-      outputApkPath: CONFIG.paths.patchedApk,
-      cliJarPath: cliPath,
-      patchesJarPath: patchesPath,
-      integrationsApkPath: integrationsPath,
-      patchConfig,
-    });
-    logger.info('[orchestrator] Patching complete');
+    let explicitPin = process.env[CONFIG.envKeys.gphotosVersion];
+    if (!explicitPin) {
+      try {
+        const versionsJsonPath = path.resolve(process.cwd(), 'config', 'versions.json');
+        const versionsData = await fs.readFile(versionsJsonPath, 'utf-8');
+        const parsed = JSON.parse(versionsData);
+        explicitPin = parsed.gphotos?.version || undefined;
+      } catch {
+        // Ignored if file doesn't exist
+      }
+    }
+
+    let apkResult: ApkFetchResult | null = null;
+
+    if (explicitPin) {
+      logger.info(`[orchestrator] Using explicit version pin: ${explicitPin}`);
+      apkResult = await fetchGPhotosApk(CONFIG.paths.inputApk, explicitPin);
+      logger.info(`[orchestrator] Google Photos ${apkResult.version} downloaded`);
+      await applyIconRecolorIfEnabled(CONFIG.paths.inputApk);
+
+      await runPatcher({
+        inputApkPath: CONFIG.paths.inputApk,
+        outputApkPath: CONFIG.paths.patchedApk,
+        cliJarPath: cliPath,
+        patchesJarPath: patchesPath,
+        integrationsApkPath: integrationsPath,
+        patchConfig,
+      });
+      logger.info('[orchestrator] Patching complete');
+    } else {
+      // Auto-resolve mode: Try candidate versions starting from the newest
+      const workspaceDir = path.dirname(CONFIG.paths.inputApk);
+      const candidates = await resolveAvailableVersions(workspaceDir);
+      if (candidates.length === 0) {
+        const initial = await fetchGPhotosApk(CONFIG.paths.inputApk);
+        candidates.push(initial.version);
+      }
+
+      logger.info(
+        `[orchestrator] Auto-resolving newest compatible version among ${candidates.length} candidate(s)...`,
+      );
+
+      let success = false;
+      let lastError: Error | null = null;
+
+      for (const candidate of candidates) {
+        logger.info(`[orchestrator] Testing candidate release: ${candidate}`);
+        try {
+          await fs.unlink(CONFIG.paths.inputApk).catch(() => {});
+          await fs.unlink(CONFIG.paths.patchedApk).catch(() => {});
+
+          const fetched = await fetchGPhotosApk(CONFIG.paths.inputApk, candidate);
+          logger.info(`[orchestrator] Google Photos ${fetched.version} downloaded`);
+          await applyIconRecolorIfEnabled(CONFIG.paths.inputApk);
+
+          await runPatcher({
+            inputApkPath: CONFIG.paths.inputApk,
+            outputApkPath: CONFIG.paths.patchedApk,
+            cliJarPath: cliPath,
+            patchesJarPath: patchesPath,
+            integrationsApkPath: integrationsPath,
+            patchConfig,
+          });
+
+          apkResult = fetched;
+          success = true;
+          logger.info(`[orchestrator] Successfully patched Google Photos ${apkResult.version}!`);
+          break;
+        } catch (err: any) {
+          lastError = err instanceof Error ? err : new Error(String(err));
+          logger.warn(
+            `[orchestrator] Candidate ${candidate} is not compatible with current ReVanced patches (${lastError.message}). Falling back to next newest release...`,
+          );
+        }
+      }
+
+      if (!success || !apkResult) {
+        throw new Error(
+          `[orchestrator] Failed to find a compatible Google Photos release. Last error: ${lastError?.message}`,
+        );
+      }
+    }
 
     // Step 7b — Re-pack for direct mmap
     await repackForDirectMmap({

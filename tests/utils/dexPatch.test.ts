@@ -334,4 +334,35 @@ describe('dexPatch', () => {
     expect(dex.subarray(12, 32).equals(expectedSha1)).toBe(true);
     expect(dex.readUInt32LE(8)).toBe(adler32(dex.subarray(12)));
   });
+
+  it('finds and neutralizes checkGmsCore and check in GmsCoreSupport with return-void', () => {
+    const dex = createSyntheticDex({
+      strings: [
+        'Lapp/revanced/extension/shared/GmsCoreSupport;',
+        'checkGmsCore',
+        'Ljava/lang/Object;',
+        '(Landroid/app/Activity;)V',
+      ],
+      types: [0, 2],
+      methods: [{ classIdx: 0, protoIdx: 0, nameIdx: 1 }],
+      classDefs: [
+        {
+          classIdx: 0,
+          methods: [
+            {
+              methodIdx: 0,
+              accessFlags: 9, // public static
+              insns: [0x6e10, 0x0001, 0x0000], // invoke-static dummy
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = patchGmsCoreSupportDex(dex);
+    expect(result.patched).toBe(true);
+    expect(result.patchedMethods).toContain(
+      'Lapp/revanced/extension/shared/GmsCoreSupport;->checkGmsCore()V',
+    );
+  });
 });

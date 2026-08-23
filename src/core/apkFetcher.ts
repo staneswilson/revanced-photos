@@ -34,9 +34,8 @@ export interface ApkFetchResult {
   outputPath: string;
 }
 
-// apkeep -l output lists versions oldest→newest, so the last match is current.
-async function resolveLatestVersion(listingDir: string): Promise<string | null> {
-  logger.info(`[apkFetcher] No version pin set; querying APKPure for latest...`);
+export async function resolveAvailableVersions(listingDir: string): Promise<string[]> {
+  logger.info(`[apkFetcher] Querying available Photos versions...`);
   try {
     const { stdout } = await execFileAsync('apkeep', [
       '-l',
@@ -48,20 +47,22 @@ async function resolveLatestVersion(listingDir: string): Promise<string | null> 
     ]);
     const matches = stdout.match(/\d+\.\d+\.\d+\.\d+/g);
     if (!matches || matches.length === 0) {
-      logger.warn(`[apkFetcher] Could not parse version listing: ${stdout.substring(0, 300)}`);
-      return null;
+      return [];
     }
-    const latest = matches[matches.length - 1]!;
-    logger.info(`[apkFetcher] Latest APKPure version: ${latest}`);
-    return latest;
+    // Reverse so newest versions appear first, removing duplicates
+    const unique = Array.from(new Set(matches)).reverse();
+    return unique;
   } catch (err: any) {
-    logger.warn(`[apkFetcher] apkeep -l failed: ${err?.message || err}`);
-    return null;
+    logger.warn(`[apkFetcher] Failed to query available versions: ${err?.message || err}`);
+    return [];
   }
 }
 
-export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResult> {
-  let versionPin = process.env[CONFIG.envKeys.gphotosVersion];
+export async function fetchGPhotosApk(
+  outputPath: string,
+  targetVersion?: string,
+): Promise<ApkFetchResult> {
+  let versionPin = targetVersion || process.env[CONFIG.envKeys.gphotosVersion];
 
   if (!versionPin) {
     try {
@@ -75,6 +76,8 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
     } catch {
       // Ignored if file doesn't exist
     }
+  } else if (targetVersion) {
+    logger.info(`[apkFetcher] Using requested version: ${targetVersion}`);
   } else {
     logger.info(`[apkFetcher] Using pinned version ${versionPin} from env var`);
   }
@@ -106,7 +109,11 @@ export async function fetchGPhotosApk(outputPath: string): Promise<ApkFetchResul
 
   // Resolve latest before download so the release tag isn't "unknown".
   if (!versionPin) {
-    versionPin = (await resolveLatestVersion(outDir)) ?? undefined;
+    const available = await resolveAvailableVersions(outDir);
+    versionPin = available[0] ?? undefined;
+    if (versionPin) {
+      logger.info(`[apkFetcher] Latest APKPure version: ${versionPin}`);
+    }
   }
 
   const packageNameArg = versionPin ? `${CONFIG.packageName}@${versionPin}` : CONFIG.packageName;

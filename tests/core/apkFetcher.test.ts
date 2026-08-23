@@ -110,4 +110,25 @@ describe('apkFetcher', () => {
       delete process.env.GPHOTOS_VERSION;
     }
   });
+
+  it('should resolve available versions in newest-first order', async () => {
+    const { resolveAvailableVersions } = await import('../../src/core/apkFetcher.js');
+    vi.mocked(child_process.execFile).mockImplementationOnce(
+      (cmd, args, options, callback: any) => {
+        callback(
+          null,
+          'Versions available for com.google.android.apps.photos on APKPure:\n| 5.78.0.428376309, 7.21.0.737764319, 7.75.0.911466973, 7.89.0.968035987\n',
+          '',
+        );
+      },
+    );
+
+    const versions = await resolveAvailableVersions('/tmp');
+    expect(versions).toEqual([
+      '7.89.0.968035987',
+      '7.75.0.911466973',
+      '7.21.0.737764319',
+      '5.78.0.428376309',
+    ]);
+  });
 });
