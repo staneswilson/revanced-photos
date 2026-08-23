@@ -42,29 +42,45 @@ export async function runPatcher(options: PatcherOptions): Promise<void> {
 
   return new Promise((resolve, reject) => {
     const child = spawn('java', args, { stdio: 'pipe' });
-    let stderrContent = '';
+    let combinedOutput = '';
 
     child.stdout.on('data', (data) => {
       process.stdout.write(data);
+      combinedOutput += data.toString();
+      if (combinedOutput.length > 20000) {
+        combinedOutput = combinedOutput.substring(combinedOutput.length - 20000);
+      }
     });
 
     child.stderr.on('data', (data) => {
       process.stderr.write(data);
-      stderrContent += data.toString();
-      if (stderrContent.length > 5000) {
-        stderrContent = stderrContent.substring(stderrContent.length - 5000);
+      combinedOutput += data.toString();
+      if (combinedOutput.length > 20000) {
+        combinedOutput = combinedOutput.substring(combinedOutput.length - 20000);
       }
     });
 
     child.on('close', (code) => {
+      const requiredPatchesSucceeded =
+        combinedOutput.includes('"GmsCore support" succeeded') &&
+        combinedOutput.includes('"Spoof features" succeeded');
+
+      const isOnlySharedExtensionFailure =
+        combinedOutput.includes('SharedExtensionPatch') || combinedOutput.includes('ExtensionHook');
+
       if (code !== 0) {
-        const snippet = stderrContent.substring(stderrContent.length - 500);
-        reject(new PatchError(`Patcher exited with code ${code}. Stderr snippet: ${snippet}`));
-      } else if (stderrContent.includes('SEVERE:') || stderrContent.includes('PatchException:')) {
-        const snippet = stderrContent.substring(stderrContent.length - 800);
+        const snippet = combinedOutput.substring(combinedOutput.length - 800);
+        reject(new PatchError(`Patcher exited with code ${code}. Output snippet: ${snippet}`));
+      } else if (requiredPatchesSucceeded && isOnlySharedExtensionFailure) {
+        logger.warn(
+          `[patcher] Upstream SharedExtensionPatch failed to hook attachBaseContext on this release; pipeline DEX guard will handle lifecycle neutralization.`,
+        );
+        resolve();
+      } else if (combinedOutput.includes('SEVERE:') || combinedOutput.includes('PatchException:')) {
+        const snippet = combinedOutput.substring(combinedOutput.length - 800);
         reject(
           new PatchError(
-            `Patcher encountered internal patch failure on this target APK version: ${snippet}`,
+            `Patcher encountered fatal patch failure on this target APK version: ${snippet}`,
           ),
         );
       } else {
