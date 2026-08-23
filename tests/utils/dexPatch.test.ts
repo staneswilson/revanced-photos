@@ -365,4 +365,35 @@ describe('dexPatch', () => {
       'Lapp/revanced/extension/shared/GmsCoreSupport;->checkGmsCore()V',
     );
   });
+
+  it('finds and neutralizes <clinit> in BaseSettings with return-void', () => {
+    const dex = createSyntheticDex({
+      strings: [
+        'Lapp/revanced/extension/shared/settings/BaseSettings;',
+        '<clinit>',
+        'Ljava/lang/Object;',
+        '()V',
+      ],
+      types: [0, 2],
+      methods: [{ classIdx: 0, protoIdx: 0, nameIdx: 1 }],
+      classDefs: [
+        {
+          classIdx: 0,
+          methods: [
+            {
+              methodIdx: 0,
+              accessFlags: 8, // static
+              insns: [0x7010, 0x0001, 0x0000], // invoke-direct dummy
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = patchGmsCoreSupportDex(dex);
+    expect(result.patched).toBe(true);
+    expect(result.patchedMethods).toContain(
+      'Lapp/revanced/extension/shared/settings/BaseSettings;-><clinit>()V',
+    );
+  });
 });

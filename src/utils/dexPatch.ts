@@ -105,7 +105,9 @@ export function patchGmsCoreSupportDex(dexBuffer: Buffer): DexPatchResult {
   if (
     !dexBuffer.includes('GmsCoreSupport') &&
     !dexBuffer.includes('checkUpdates') &&
-    !dexBuffer.includes('checkGmsCore')
+    !dexBuffer.includes('checkGmsCore') &&
+    !dexBuffer.includes('BaseSettings') &&
+    !dexBuffer.includes('settings/Setting')
   ) {
     return { patched: false, patchedMethods: [] };
   }
@@ -200,7 +202,7 @@ export function patchGmsCoreSupportDex(dexBuffer: Buffer): DexPatchResult {
 
         const { className, methodName, returnType } = getMethodInfo(cumulativeMethodIdx);
 
-        // Match checkUpdates, checkGmsCore, check methods in GmsCoreSupport classes
+        // Match checkUpdates, checkGmsCore, check methods, and BaseSettings/Setting static initializers
         const isGmsSupportClass =
           className.includes('GmsCoreSupport') ||
           className.includes('app/revanced/extension/shared/GmsCore');
@@ -209,7 +211,11 @@ export function patchGmsCoreSupportDex(dexBuffer: Buffer): DexPatchResult {
           methodName === 'checkGmsCore' ||
           (methodName === 'check' && isGmsSupportClass);
 
-        if (isGmsSupportClass && isTargetCheckMethod) {
+        const isSettingsClinit =
+          methodName === '<clinit>' &&
+          (className.includes('BaseSettings') || className.includes('settings/Setting'));
+
+        if ((isGmsSupportClass && isTargetCheckMethod) || isSettingsClinit) {
           const codeItemOff = codeOff.value;
           const insnsSize = dexBuffer.readUInt32LE(codeItemOff + 12);
           // Dalvik opcode 0x000E is return-void, valid for methods with void return descriptor 'V'
