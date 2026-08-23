@@ -1,8 +1,8 @@
 {
   "gphotos": {
     "version": "",
-    "updatedAt": "2026-05-19T00:00:00Z",
+    "updatedAt": "2026-08-23T00:00:00Z",
     "source": "apkmirror",
-    "note": "Empty = the pipeline auto-resolves the latest Photos release from APKMirror. APKMirror ships true universal APKs (all ABIs in one file), so the previous 7.21 pin is no longer required for 64-bit-only devices. If APKMirror is unreachable the pipeline falls back to APKPure automatically. To force a specific version, set GPHOTOS_VERSION in the environment (accepts 3-segment `7.76.0` or 4-segment `7.76.0.913939682`). To force the APKPure path entirely, set APK_SOURCE=apkpure — in that case, pin a 7.21.x universal version here to avoid APKPure's 32-bit-only modern splits."
+    "note": "Empty = the pipeline auto-resolves the latest Photos release from APKMirror. The pipeline automatically applies a DEX startup guard to neutralize GmsCoreSupport checkUpdates NullPointerExceptions, enabling seamless compatibility with the newest Google Photos releases. To force a specific version, set GPHOTOS_VERSION in the environment (accepts 3-segment `7.76.0` or 4-segment `7.76.0.913939682`)."
   }
 }

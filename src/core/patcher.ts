@@ -26,12 +26,15 @@ export async function runPatcher(options: PatcherOptions): Promise<void> {
   // `--patch-bundle` flags are all gone. Patch options use defaults — the
   // "Spoof features" patch already targets Pixel XL out of the box.
   const args = [
-    '-jar', options.cliJarPath,
+    '-jar',
+    options.cliJarPath,
     'patch',
-    '-p', options.patchesJarPath,
+    '-p',
+    options.patchesJarPath,
     '-b',
     ...options.patchConfig.enableFlags,
-    '-o', options.outputApkPath,
+    '-o',
+    options.outputApkPath,
     options.inputApkPath,
   ];
 

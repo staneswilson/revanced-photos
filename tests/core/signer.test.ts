@@ -19,7 +19,7 @@ vi.mock('fs/promises', () => ({
     writeFile: vi.fn().mockResolvedValue(undefined),
     unlink: vi.fn().mockResolvedValue(undefined),
     stat: vi.fn().mockResolvedValue({ size: 1024 }),
-  }
+  },
 }));
 
 describe('signer', () => {
@@ -43,15 +43,15 @@ describe('signer', () => {
     expect(fs.writeFile).toHaveBeenCalledWith(
       expect.stringContaining('keystore-'),
       expect.any(Buffer),
-      { mode: 0o600 }
+      { mode: 0o600 },
     );
     expect(child_process.execFile).toHaveBeenCalledWith(
       'apksigner',
       expect.arrayContaining(['sign', '--ks-key-alias', 'alias']),
       expect.any(Object),
-      expect.any(Function)
+      expect.any(Function),
     );
-    
+
     // Check if secure wipe was called (random bytes written then unlinked)
     // writeFile is called twice: once to create, once to wipe
     expect(fs.writeFile).toHaveBeenCalledTimes(2);
@@ -59,9 +59,11 @@ describe('signer', () => {
   });
 
   it('should still wipe the temp file if signing fails', async () => {
-    vi.mocked(child_process.execFile).mockImplementationOnce((cmd, args, options, callback: any) => {
-      callback(new Error('Signing failed'));
-    });
+    vi.mocked(child_process.execFile).mockImplementationOnce(
+      (cmd, args, options, callback: any) => {
+        callback(new Error('Signing failed'));
+      },
+    );
 
     await expect(signApk('in.apk', 'out.apk')).rejects.toThrowError('Signing failed');
 

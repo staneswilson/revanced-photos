@@ -2,16 +2,13 @@ module.exports = {
   parser: '@typescript-eslint/parser',
   parserOptions: { project: './tsconfig.eslint.json', tsconfigRootDir: __dirname },
   plugins: ['@typescript-eslint', 'security'],
-  extends: [
-    'eslint:recommended',
-    'plugin:@typescript-eslint/recommended-type-checked',
-  ],
+  extends: ['eslint:recommended', 'plugin:@typescript-eslint/recommended-type-checked'],
   rules: {
-    'no-console': 'warn',                                    // Use logger.ts instead
+    'no-console': 'warn', // Use logger.ts instead
     '@typescript-eslint/no-floating-promises': 'error',
     '@typescript-eslint/await-thenable': 'error',
     '@typescript-eslint/no-misused-promises': 'error',
-    'security/detect-child-process': 'warn',                 // Intentional — see patcher.ts
+    'security/detect-child-process': 'warn', // Intentional — see patcher.ts
     // Paths come from frozen CONFIG.paths.* / os.tmpdir(), never user input.
     'security/detect-non-literal-fs-filename': 'off',
     '@typescript-eslint/no-explicit-any': 'off',
@@ -33,8 +30,8 @@ module.exports = {
         '@typescript-eslint/no-var-requires': 'off',
         '@typescript-eslint/no-unsafe-call': 'off',
         '@typescript-eslint/unbound-method': 'off',
-        'no-console': 'off'
-      }
-    }
-  ]
+        'no-console': 'off',
+      },
+    },
+  ],
 };

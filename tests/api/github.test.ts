@@ -8,7 +8,9 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const mockReleaseJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/mock-release.json'), 'utf-8'));
+const mockReleaseJson = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '../fixtures/mock-release.json'), 'utf-8'),
+);
 const checksumsTxt = fs.readFileSync(path.join(__dirname, '../fixtures/checksums.txt'), 'utf-8');
 
 const server = setupServer(
@@ -48,12 +50,12 @@ describe('GitHub API Utils', () => {
     server.listen({ onUnhandledRequest: 'error' });
     vi.useFakeTimers();
   });
-  
+
   afterEach(() => {
     server.resetHandlers();
     vi.clearAllTimers();
   });
-  
+
   afterAll(() => {
     server.close();
     vi.useRealTimers();
@@ -61,11 +63,11 @@ describe('GitHub API Utils', () => {
 
   it('should fetch the latest release successfully and parse checksums', async () => {
     const resultPromise = fetchLatestReVancedRelease('ReVanced', 'revanced-cli');
-    
+
     // The implementation has no retries on success, but it makes multiple calls.
     // If it hits an unhandled request or something, it might retry.
     // Since we mocked all, it should be fast.
-    
+
     const result = await resultPromise;
     expect(result.tag).toBe('v1.0.0');
     expect(result.cli.name).toBe('revanced-cli-1.0.0.jar');
@@ -79,28 +81,31 @@ describe('GitHub API Utils', () => {
     server.use(
       http.get('https://api.github.com/repos/ReVanced/revanced-cli/releases/latest', () => {
         return new HttpResponse(null, { status: 500 });
-      })
+      }),
     );
-    
+
     let caughtError: any;
     const resultPromise = fetchLatestReVancedRelease('ReVanced', 'revanced-cli').catch((e) => {
       caughtError = e;
     });
-    
+
     // Advance timers manually to trigger retries
     await vi.advanceTimersByTimeAsync(1000);
     await vi.advanceTimersByTimeAsync(2000);
     await vi.advanceTimersByTimeAsync(4000);
-    
+
     await resultPromise;
     expect(caughtError?.message).toContain('HTTP 500');
   });
 
   it('should handle missing integrations gracefully', async () => {
     server.use(
-      http.get('https://api.github.com/repos/ReVanced/revanced-integrations/releases/latest', () => {
-        return new HttpResponse(null, { status: 404 });
-      })
+      http.get(
+        'https://api.github.com/repos/ReVanced/revanced-integrations/releases/latest',
+        () => {
+          return new HttpResponse(null, { status: 404 });
+        },
+      ),
     );
 
     const result = await fetchLatestReVancedRelease('ReVanced', 'revanced-cli');
@@ -127,9 +132,12 @@ describe('GitHub API Utils', () => {
       http.get('https://api.github.com/repos/ReVanced/revanced-patches/releases/latest', () => {
         return new HttpResponse(null, { status: 451 });
       }),
-      http.get('https://api.github.com/repos/ReVanced/revanced-integrations/releases/latest', () => {
-        return new HttpResponse(null, { status: 404 });
-      }),
+      http.get(
+        'https://api.github.com/repos/ReVanced/revanced-integrations/releases/latest',
+        () => {
+          return new HttpResponse(null, { status: 404 });
+        },
+      ),
     );
 
     const result = await fetchLatestReVancedRelease('ReVanced', 'revanced-cli');

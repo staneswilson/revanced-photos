@@ -4,16 +4,19 @@ import os from 'os';
 import crypto from 'crypto';
 import fs from 'fs/promises';
 
-const execFileAsync = (cmd: string, args: string[], options?: any) => new Promise<{stdout: string, stderr: string}>((resolve, reject) => {
-  execFileOriginal(cmd, args, options || {}, (err, stdout, stderr) => {
-    if (err) {
-      (err as any).stdout = stdout;
-      (err as any).stderr = stderr;
-      return reject(err instanceof Error ? err : new Error((err as any).message || 'Unknown Error'));
-    }
-    resolve({ stdout: String(stdout), stderr: String(stderr) });
+const execFileAsync = (cmd: string, args: string[], options?: any) =>
+  new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    execFileOriginal(cmd, args, options || {}, (err, stdout, stderr) => {
+      if (err) {
+        (err as any).stdout = stdout;
+        (err as any).stderr = stderr;
+        return reject(
+          err instanceof Error ? err : new Error((err as any).message || 'Unknown Error'),
+        );
+      }
+      resolve({ stdout: String(stdout), stderr: String(stderr) });
+    });
   });
-});
 import { logger } from '../utils/logger.js';
 import { secureWipe } from '../utils/fs.js';
 import { CONFIG } from '../config.js';
@@ -38,7 +41,9 @@ export async function signApk(inputApkPath: string, outputApkPath: string): Prom
   if (!keyPass) missing.push(CONFIG.envKeys.keyPass);
 
   if (missing.length > 0) {
-    throw new ConfigurationError(`Missing required environment variables for signing: ${missing.join(', ')}`);
+    throw new ConfigurationError(
+      `Missing required environment variables for signing: ${missing.join(', ')}`,
+    );
   }
 
   const keystoreBuffer = Buffer.from(b64!, 'base64');
@@ -52,11 +57,16 @@ export async function signApk(inputApkPath: string, outputApkPath: string): Prom
     logger.info(`[signer] Signing APK...`);
     await execFileAsync('apksigner', [
       'sign',
-      '--ks', tempPath,
-      '--ks-key-alias', alias!,
-      '--ks-pass', `pass:${storePass}`,
-      '--key-pass', `pass:${keyPass}`,
-      '--out', outputApkPath,
+      '--ks',
+      tempPath,
+      '--ks-key-alias',
+      alias!,
+      '--ks-pass',
+      `pass:${storePass}`,
+      '--key-pass',
+      `pass:${keyPass}`,
+      '--out',
+      outputApkPath,
       inputApkPath,
     ]);
 

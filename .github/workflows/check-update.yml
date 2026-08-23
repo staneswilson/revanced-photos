@@ -64,10 +64,10 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "chore: bump Google Photos to ${{ steps.fetch-version.outputs.LATEST_VERSION }}"
-          title: "chore: bump Google Photos to ${{ steps.fetch-version.outputs.LATEST_VERSION }}"
+          commit-message: 'chore: bump Google Photos to ${{ steps.fetch-version.outputs.LATEST_VERSION }}'
+          title: 'chore: bump Google Photos to ${{ steps.fetch-version.outputs.LATEST_VERSION }}'
           body: |
             Automated version bump for Google Photos.
             New version: `${{ steps.fetch-version.outputs.LATEST_VERSION }}`
-          branch: "update-gphotos-${{ steps.fetch-version.outputs.LATEST_VERSION }}"
+          branch: 'update-gphotos-${{ steps.fetch-version.outputs.LATEST_VERSION }}'
           delete-branch: true

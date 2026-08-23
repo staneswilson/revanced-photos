@@ -9,6 +9,7 @@ import archiver from 'archiver';
 import { logger } from '../utils/logger.js';
 import { logAbiInventory } from './abiInventory.js';
 import { inspectExtractNativeLibs, setExtractNativeLibsFalse } from '../utils/axml.js';
+import { patchGmsCoreSupportDex } from '../utils/dexPatch.js';
 
 const execFileAsync = (cmd: string, args: string[], options?: any) =>
   new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
@@ -132,6 +133,14 @@ async function writeRepackedZip(
     if (entry.entryName.startsWith('META-INF/')) continue;
 
     const data = entry === manifestEntry ? newManifest : entry.getData();
+    if (entry.entryName.startsWith('classes') && entry.entryName.endsWith('.dex')) {
+      const dexPatchResult = patchGmsCoreSupportDex(data);
+      if (dexPatchResult.patched) {
+        logger.info(
+          `[apkRepack] Applied permanent startup fix to ${entry.entryName} (${dexPatchResult.patchedMethods.join(', ')})`,
+        );
+      }
+    }
     const store = shouldStoreUncompressed(entry.entryName);
     if (store) storedCount++;
     else deflatedCount++;

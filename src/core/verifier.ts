@@ -8,7 +8,7 @@ export class VerificationError extends Error {
     public readonly filePath: string,
     public readonly expected: string,
     public readonly actual: string,
-  ) { 
+  ) {
     super(`Checksum mismatch for ${filePath}`);
     this.name = 'VerificationError';
   }
@@ -27,7 +27,9 @@ export async function verifySha256(filePath: string, expectedHash: string): Prom
   const actualHash = hash.digest('hex');
 
   if (actualHash !== expectedHash) {
-    logger.error(`[verifier] Checksum mismatch for ${filePath}. Expected: ${expectedHash}, Actual: ${actualHash}`);
+    logger.error(
+      `[verifier] Checksum mismatch for ${filePath}. Expected: ${expectedHash}, Actual: ${actualHash}`,
+    );
     throw new VerificationError(filePath, expectedHash, actualHash);
   }
 

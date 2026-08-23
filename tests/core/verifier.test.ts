@@ -25,7 +25,7 @@ describe('Verifier', () => {
   it('should throw VerificationError on mismatch', async () => {
     const errorPromise = verifySha256(testFile, 'invalid-hash');
     await expect(errorPromise).rejects.toThrowError(VerificationError);
-    
+
     try {
       await errorPromise;
     } catch (e: any) {

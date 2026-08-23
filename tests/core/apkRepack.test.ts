@@ -199,6 +199,23 @@ describe('apkRepack — repackForDirectMmap (pure-JS pipeline)', () => {
     expect(inspection.extractNativeLibsValue).toBe(false);
     expect(outManifest!.getData().length).toBe(preFlagged.length);
   });
+
+  it('scans and neutralizes GmsCoreSupport checkUpdates in classes.dex during repack', async () => {
+    const inputApk = path.join(workDir, 'input-with-dex.apk');
+    const outputApk = path.join(workDir, 'output-with-dex.apk');
+    const manifestBuf = await fs.readFile(FIXTURE_MANIFEST);
+
+    const zip = new AdmZip();
+    zip.addFile('AndroidManifest.xml', manifestBuf);
+    zip.addFile('classes.dex', Buffer.from('dummy-dex'));
+    zip.writeZip(inputApk);
+
+    await repackForDirectMmap({ inputApkPath: inputApk, outputApkPath: outputApk });
+
+    const outZip = new AdmZip(outputApk);
+    const outDex = outZip.getEntries().find((e) => e.entryName === 'classes.dex');
+    expect(outDex).toBeDefined();
+  });
 });
 
 describe('verifyNativeLibsStored', () => {

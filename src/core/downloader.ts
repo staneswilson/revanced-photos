@@ -12,7 +12,7 @@ export class DownloadError extends Error {
 
 export async function downloadFile(url: string, outputPath: string, label?: string): Promise<void> {
   const response = await fetch(url);
-  
+
   if (!response.ok || !response.body) {
     throw new DownloadError(`HTTP ${response.status} downloading ${url}`);
   }
@@ -35,7 +35,9 @@ export async function downloadFile(url: string, outputPath: string, label?: stri
       if (totalBytes > 0) {
         const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
         const percent = ((receivedBytes / totalBytes) * 100).toFixed(1);
-        process.stderr.write(`\r[downloader] ${label || 'file'} — ${receivedMB}MB / ${totalMB}MB (${percent}%)`);
+        process.stderr.write(
+          `\r[downloader] ${label || 'file'} — ${receivedMB}MB / ${totalMB}MB (${percent}%)`,
+        );
       } else {
         process.stderr.write(`\r[downloader] ${label || 'file'} — ${receivedMB}MB received`);
       }
