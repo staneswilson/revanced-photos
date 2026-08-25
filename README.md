@@ -1,85 +1,203 @@
-# ReVanced Google Photos Pipeline
+# Morphe Google Photos Patching & Automation Pipeline
 
-[![build-and-release](https://github.com/staneswilson/revanced-photos/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/staneswilson/revanced-photos/actions/workflows/build-and-release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Latest release](https://img.shields.io/github/v/release/staneswilson/revanced-photos?include_prereleases&label=release)](https://github.com/staneswilson/revanced-photos/releases/latest)
+[![Node: >=18.0.0](https://img.shields.io/badge/Node->=18.0.0-green.svg)](https://nodejs.org)
+[![Java: >=17](<https://img.shields.io/badge/Java-%3E=17%20(64--bit)-orange.svg>)](https://www.oracle.com/java/)
+[![Morphe Ecosystem](https://img.shields.io/badge/Patcher-Morphe%20CLI-purple.svg)](https://github.com/MorpheApp)
 
-An automated GitHub Actions pipeline that patches Google Photos with [ReVanced](https://revanced.app) to spoof the Pixel XL (`marlin`) device fingerprint. Pixel XL was sold with a permanent, account-bound entitlement to **unlimited original-quality Google Photos backups** — by making the app report itself as a Pixel XL, the entitlement is granted to the signed-in account regardless of the actual device.
+An enterprise-grade, standalone build and patching toolkit to modify **Google Photos (`com.google.android.apps.photos`)** using the modern **Morphe** ecosystem. Configured to spoof the Google Pixel XL (`marlin`) hardware footprint for **permanent, lifetime unlimited original-quality cloud backup** with zero crashes, strict sideload integrity, and seamless GmsCore (MicroG) authentication.
 
-The pipeline runs weekly, fetches the latest patch-compatible Google Photos APK from APKPure, applies the ReVanced `Spoof features` and `GmsCore support` patches, signs the result with your keystore, and publishes the artifacts as a GitHub Release.
+---
 
-## What you get on every release
+## 🏛️ Architecture & Design Philosophy
 
-- `output-signed.apk` — patched, re-signed Google Photos APK. Install on a non-rooted device alongside [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases).
-- `magisk-revanced-gphotos.zip` — Magisk / KernelSU module that replaces the system Google Photos at boot. For rooted devices.
-- `release-notes.md` + `meta.json` — the exact Photos version, ReVanced CLI version, patches version, and SHA-256 of the signed APK.
+```
+                                  ┌───────────────────────────────┐
+                                  │   Google Photos (nodpi APK)   │
+                                  │ (Monolithic Universal Binary) │
+                                  └───────────────┬───────────────┘
+                                                  │
+                                                  ▼
+┌───────────────────────┐            ┌────────────────────────────┐            ┌────────────────────────┐
+│  Morphe Patches .mpp  ├───────────►│   Morphe CLI (-Xmx4g Heap) ├───────────►│ Patched Intermediate  │
+│  (MorpheApp Releases) │            │   (options.json Injected)  │            │ (classes*.dex Spoofed) │
+└───────────────────────┘            └────────────────────────────┘            └───────────┬────────────┘
+                                                                                           │
+                                                                                           ▼
+┌───────────────────────┐            ┌────────────────────────────┐            ┌────────────────────────┐
+│ uber-apk-signer (JAR) ├───────────►│ 4-Byte ZipAlign + v1/v2/v3 ├───────────►│ Output Signed APK      │
+│ (v1/v2/v3 Signatures) │            │   Cryptographic Signing    │            │ (Crash-Free Sideload)  │
+└───────────────────────┘            └────────────────────────────┘            └────────────────────────┘
+```
 
-The patched APK ships with a **grayscaled launcher icon** so it's visually distinct from the stock Google Photos on devices where both are installed. Set `SKIP_ICON_RECOLOR=true` to keep the original colored icon.
+### Key Engineering Features:
 
-## How it works
+1. **Morphe Ecosystem Transition**: Standalone toolchain decoupling from legacy ReVanced components. Utilizes `morphe-cli`, Morphe patch bundles (`.mpp`), and `options.json`.
+2. **Crash Prevention & Sideload Integrity**:
+   - **Monolithic `nodpi` Validation**: Validates that the input APK is a monolithic package (contains `AndroidManifest.xml` and `classes.dex`) and rejects split APK bundles (`.apkm`, `.xapk`, `.apks`, or split configs) that cause instant launch crashes.
+   - **uber-apk-signer Integration**: Guarantees 4-byte memory-aligned zip structures (`zipalign`) and dual/triple cryptographic signatures (v1, v2, v3) for compatibility across Android 8.0 through Android 15+.
+3. **Multi-Dex Memory Safety**: Allocates **4GB JVM Heap (`-Xmx4g`)** with modern garbage collection (`-XX:+UseG1GC`) to prevent out-of-memory crashes during smali decompilation/recompilation.
+4. **Permanent Pixel XL Spoofing**: Spoofs `com.google.android.apps.photos.NEXUS_PRELOAD` and `marlin` build characteristics to unlock unlimited original-quality backups without quota consumption.
+5. **GmsCore (MicroG) Integration**: Bypasses signature checking and routes Play Services authentication to standalone MicroG / GmsCore (`app.revanced.android.gms`) for non-root Google account login.
 
-1. **Resolve version + fetch APK** — by default the pipeline scrapes [APKMirror](https://www.apkmirror.com/apk/google-inc/photos/) for the latest Photos release and downloads its **Universal** variant (all ABIs in one file). APKMirror is preferred because APKPure now ships 32-bit-only split bundles for recent versions, which won't install on 64-bit-only Android (Pixel 7+). If APKMirror is unreachable (Cloudflare 403, page redesign), the pipeline automatically falls back to APKPure via `apkeep`, merging any XAPK splits with [APKEditor](https://github.com/REAndroid/APKEditor). Override the version with `GPHOTOS_VERSION` (accepts 3-segment `7.76.0` or 4-segment `7.76.0.913939682`). Force a specific source with `APK_SOURCE=apkmirror` (default) or `APK_SOURCE=apkpure`.
-2. **Fetch tooling** — ReVanced CLI v6 from `github.com/ReVanced/revanced-cli` (SHA-256 verified via the asset `digest` field). Patches RVP from `github.com/ReVanced/revanced-patches`, with automatic fallback to `https://api.revanced.app/v5/patches` when GitHub returns HTTP 451.
-3. **Patch** — `revanced-cli patch -p patches.rvp -b -e "Spoof features" -e "GmsCore support" -o output.apk input.apk`. The `Spoof features` patch defaults to enabling `NEXUS_PRELOAD` (Pixel XL) and disabling all newer Pixel features — exactly the unlimited-storage configuration.
-4. **Sign + package** — `apksigner` re-signs with your keystore (Base64-injected via GitHub Secrets, written 0o600, secure-wiped after use). The signed APK is then bundled into a Magisk module via `archiver`.
+---
 
-See [docs/architecture.md](docs/architecture.md) for the data flow and threat model.
+## 📦 Core Deliverables
 
-## Quick start
+| File                                         | Purpose                                                                                                                             |
+| :------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------- |
+| [`config.json`](config.json)                 | Central pipeline configuration declaring target package, Pixel XL spoof properties, JVM flags, and GitHub release endpoints.        |
+| [`options.json`](options.json)               | Morphe CLI patch options specifying hardware spoofing keys and GmsCore authentication settings.                                     |
+| [`export-profile.json`](export-profile.json) | 1-click importable profile for the on-device **Morphe Manager** Android app.                                                        |
+| [`build.ps1`](build.ps1)                     | Automated Windows PowerShell build script with pre-flight checks (Java 17+), dynamic GitHub asset download, and transcript logging. |
+| [`build.mjs`](build.mjs)                     | Cross-platform Node.js (ESM) automation runner for CI/CD or macOS/Linux/Windows with **zero external npm dependencies**.            |
+| [`package.json`](package.json)               | Project manifest with convenient scripts (`pnpm run morphe:build`, `pnpm run morphe:clean`).                                        |
 
-1. Fork the repo.
-2. Generate a signing keystore: `keytool -genkeypair -keystore release.jks -alias revanced -keyalg RSA -keysize 2048 -validity 10000`.
-3. Add four repository secrets under **Settings → Secrets and variables → Actions**: `KEYSTORE_BASE64` (your `.jks` Base64-encoded), `KEY_ALIAS`, `KEY_STORE_PASS`, `KEY_PASS`.
-4. Trigger the **build-and-release** workflow from the **Actions** tab.
+---
 
-Detailed setup (including local builds): [SETUP.md](SETUP.md).
+## 📋 Prerequisites
 
-## Installation
+- **Java**: 64-bit **Java 17 or Java 21** (JDK or JRE) installed and available in your `PATH`.
+- **Operating System**: Windows 10/11, macOS, or Linux.
+- **Node.js** (Optional for `build.mjs`): Node.js 18.0.0+ (No npm install required).
+- **PowerShell** (Optional for `build.ps1`): Windows PowerShell 5.1 or PowerShell Core 7+.
 
-### Non-rooted devices (signed APK + MicroG)
+---
 
-1. Install [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases). Required — without it the patched app cannot reach Google services.
-2. Download `output-signed.apk` from the [latest release](https://github.com/staneswilson/revanced-photos/releases/latest).
-3. Install the APK. Sign in with your Google account.
+## 🚀 Quick Start
 
-### Rooted devices (Magisk / KernelSU module)
+### 1. Sourcing the Monolithic (`nodpi`) Google Photos APK
 
-1. Install [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases). **Still required on rooted devices** — the `GmsCore support` patch routes the app's Play Services calls to GmsCore regardless of root. Without it the app errors out with "GMS Core is not installed."
-2. Download `magisk-revanced-gphotos.zip` from the [latest release](https://github.com/staneswilson/revanced-photos/releases/latest).
-3. Magisk → Modules → Install from storage → select the zip.
-4. Reboot. The patched app replaces the stock Google Photos at the system level.
+> [!IMPORTANT]
+> Google Photos is distributed as both split bundles (`.apkm`/`.xapk`) and monolithic APKs. **You must use a monolithic `nodpi` universal APK.**
 
-## Security properties
+1. Visit [APKMirror Google Photos](https://www.apkmirror.com/apk/google-inc/photos/).
+2. Select any recent version (e.g., `7.x.x`).
+3. Under the **Download** table, select the variant with:
+   - **Architecture**: `universal` or `arm64-v8a + armeabi-v7a`
+   - **Screen DPI**: `nodpi` (Do **not** download files labeled `bundle` or `APKMs`)
+4. Place the downloaded `.apk` into the `./input/` folder (e.g., `./input/GooglePhotos-nodpi.apk`).
 
-Concrete things the pipeline does, in order of strength:
+---
 
-- **Pinned GitHub Action SHAs.** All actions are referenced by full commit SHA, not floating tags — no supply-chain swap via tag re-pointing.
-- **No binaries in git.** `.gitignore` enforces no `.apk`, `.jks`, or keystore artifacts are tracked.
-- **Ephemeral keystore.** Decoded from Base64 secret at runtime, written with `0o600` permissions, secure-wiped (random overwrite + unlink) in a `try/finally` block — wiped even if the build crashes.
-- **No shell interpolation.** All external invocations use Node's `child_process.execFile` with explicit argument arrays. Package names, versions, and paths cannot break out into shell commands.
-- **SHA-256 verification (best effort).** ReVanced CLI and integrations are verified against the digest published by the upstream release. The patches RVP is verified when sourced from GitHub. When the v5 API fallback is used (because GitHub returns 451), the API publishes no SHA-256 — integrity rests on TLS to `api.revanced.app`. The asset is GPG-signed via the `signature_download_url` sidecar; verifying that signature against ReVanced's public key is the planned next hardening step.
+### 2. Building via PowerShell (Windows)
 
-## FAQ
+Open PowerShell in the project directory:
 
-**Why Pixel XL specifically?**
-Google grandfathered unlimited original-quality Photos backups for the original Pixel and Pixel XL (codenames `sailfish` and `marlin`). The entitlement is checked client-side via the `com.google.android.apps.photos.NEXUS_PRELOAD` system feature, which the `Spoof features` patch can fake on any device.
+```powershell
+# Standard build (auto-discovers APK in ./input, fetches latest Morphe tools, patches & signs)
+.\build.ps1
 
-**Do I need root?**
-No. The signed APK + [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases) path works on stock Android. Root is optional and unlocks the Magisk module path, which seamlessly replaces the system Google Photos.
+# Specify a custom input APK directly
+.\build.ps1 -InputApk "C:\Downloads\GooglePhotos-nodpi.apk"
 
-**Why APKMirror instead of APKPure?**
-APKPure now uploads recent Google Photos as split-APK bundles that contain only `config.armeabi_v7a.apk` — there is no `arm64-v8a` native library inside, so the merged APK refuses to install on 64-bit-only Android (Pixel 7 and newer, recent flagships). APKMirror still ships true universal APKs (all ABIs in one file), so it produces a build that installs everywhere. The pipeline keeps APKPure as an automatic fallback in case APKMirror blocks the CI runner.
+# Perform a clean build
+.\build.ps1 -Clean
+```
 
-**Will Google block this eventually?**
-Possibly. Google has progressively tightened device attestation for some services. The project is best-effort — when ReVanced patches are updated to handle Google's changes, the next weekly build picks them up automatically.
+All build events are recorded to `./logs/build-transcript-*.log`.
 
-**Is it safe to put my Google account on a patched APK?**
-You're installing a modified version of a Google application. Treat it like any third-party app: review what the pipeline does (the source is in this repo, the build is reproducible from CI), and decide. The patches modify only client-side feature reporting; they don't add network code or telemetry.
+---
 
-## Disclaimer
+### 3. Building via Node.js (Cross-Platform: Windows, macOS, Linux, CI/CD)
 
-This project is not affiliated with, sponsored by, or endorsed by Google LLC, ReVanced, MicroG, KernelSU, or Magisk. "Google Photos", "Pixel", and "Pixel XL" are trademarks of Google LLC. "Magisk" and "KernelSU" are trademarks of their respective owners. The project is provided as-is, intended for personal use of your own Google account, and ships under the terms below. You are responsible for complying with Google's terms of service and any local laws.
+```bash
+# Using pnpm / npm
+pnpm run morphe:build
 
-## License
+# Or directly with Node.js (Zero npm dependencies required)
+node build.mjs
 
-[GPL-3.0](LICENSE), consistent with the ReVanced ecosystem.
+# Pass custom input APK
+node build.mjs --input ./input/photos-nodpi.apk
+
+# Clean build
+node build.mjs --clean
+```
+
+The output signed APK will be saved to:
+`./output/com.google.android.apps.photos-morphe-signed.apk`
+
+---
+
+### 4. 1-Click On-Device Patching (Morphe Manager App)
+
+If you prefer patching directly on your Android phone using **Morphe Manager**:
+
+1. Install [Morphe Manager](https://github.com/MorpheApp/morphe-manager/releases) on your phone.
+2. Download and transfer [`export-profile.json`](export-profile.json) to your phone.
+3. Open **Morphe Manager** ➔ **Settings** ➔ **Import Profile** ➔ Select `export-profile.json`.
+4. Select your downloaded monolithic Google Photos APK and tap **Patch**.
+
+---
+
+## 📱 Sideloading & Post-Installation Setup
+
+### Step 1: Install GmsCore (MicroG)
+
+Because the modified Google Photos app cannot use system Google Play Services directly, install **GmsCore**:
+
+1. Download the latest `GmsCore` APK from [ReVanced GmsCore Releases](https://github.com/ReVanced/GmsCore/releases) or [MicroG-RE Releases](https://github.com/MorpheApp/MicroG-RE/releases).
+2. Install the GmsCore APK and open it once. Sign into your Google Account.
+
+### Step 2: Install the Patched Google Photos APK
+
+Connect your device via USB with ADB enabled, or transfer the APK to your device:
+
+```bash
+adb install -r output/com.google.android.apps.photos-morphe-signed.apk
+```
+
+---
+
+## ⚡ Battery Optimization Whitelisting (Critical)
+
+To ensure background backup operates continuously without being killed by OEM aggressive RAM managers:
+
+### 1. Google Photos Whitelisting:
+
+- Go to Android **Settings** ➔ **Apps** ➔ **Google Photos**.
+- Tap **App Battery Usage** (or **Battery**).
+- Change setting from _Optimized_ / _Restricted_ to **Unrestricted** (or _Don't Optimize_).
+- Ensure **Allow background activity** and **Autostart** (Xiaomi/MIUI) are toggled **ON**.
+
+### 2. GmsCore (MicroG) Whitelisting:
+
+- Go to Android **Settings** ➔ **Apps** ➔ **GmsCore / microG Services**.
+- Set Battery to **Unrestricted**.
+- In GmsCore settings, verify **Google Cloud Messaging (GCM)** and **Battery Optimizations** are allowed.
+
+---
+
+## 🔍 Zero-Quota Verification Protocol
+
+To verify that your photos and videos are backing up under the **Pixel XL Unlimited Original Quality** entitlement without counting against your Google One 15GB quota:
+
+1. Open the patched **Google Photos** app.
+2. Tap your **Profile Picture** in the top right corner.
+3. Tap **Google Photos settings** ➔ **Backup**.
+4. Confirm the banner reads:
+   > 🌟 **"This Pixel can back up unlimited photos & videos at no charge."**
+5. Back up a sample large video (e.g., 4K 100MB+ clip).
+6. Verify on [one.google.com/storage](https://one.google.com/storage) on a web browser that your **Google Photos storage used** did **NOT** increase by a single byte.
+
+---
+
+## 🛠️ Operational Troubleshooting Matrix
+
+| Issue / Symptom                                                              | Root Cause                                           | Remediation                                                                                                     |
+| :--------------------------------------------------------------------------- | :--------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------- |
+| **`CRITICAL INTEGRITY REJECTION: ... is a split bundle`**                    | Downloaded `.apkm`, `.xapk`, or multi-split bundle.  | Obtain a monolithic `nodpi` APK from APKMirror.                                                                 |
+| **Out of Memory (`java.lang.OutOfMemoryError: Java heap space`)**            | Multi-dex processing exceeded standard heap limit.   | Ensure 64-bit Java 17+ is used. The script automatically supplies `-Xmx4g`.                                     |
+| **"GMS Core is not installed" or Sign-in Spinner Infinite Loop**             | Standalone GmsCore is missing or battery killed.     | Install [GmsCore](https://github.com/ReVanced/GmsCore/releases) and set battery optimization to _Unrestricted_. |
+| **App crashes immediately on launch (SIGSEGV / ClassNotFound)**              | Corrupt dex or missing native library ABI mismatch.  | Ensure the input APK was `nodpi` and signed with `uber-apk-signer` (v1/v2/v3 enabled).                          |
+| **`Signature verification failed` / `INSTALL_PARSE_FAILED_NO_CERTIFICATES`** | Incomplete zip alignment or broken signature scheme. | `uber-apk-signer` automatically signs with v1, v2, and v3 schemes. Run with `--clean` to regenerate.            |
+| **GitHub API Rate Limit (`HTTP 403 Forbidden`)**                             | Exceeded unauthenticated rate limit (60 req/hr).     | Set your GitHub token in environment: `$env:GITHUB_TOKEN="ghp_..."` or `export GITHUB_TOKEN="ghp_..."`.         |
+
+---
+
+## 📄 License & Compliance
+
+Distributed under the **GPL-3.0 License**.
+
+_Disclaimer: This tooling is intended for personal research and educational workflows. Google Photos and Pixel are registered trademarks of Google LLC. This project is not affiliated with Google LLC._

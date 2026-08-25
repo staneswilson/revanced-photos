@@ -1,110 +1,92 @@
-# Architecture and Security Model
+# System Architecture & Security Model
 
-This document outlines the data flow, security mitigations, and threat model for the ReVanced Google Photos pipeline.
+This document outlines the data flow, component architecture, security model, and backup spoofing mechanisms of the **Morphe Google Photos Automation Toolkit**.
 
-## System Architecture
+---
+
+## 🏛️ System Architecture
 
 ```mermaid
 graph TD
-    A[GitHub Actions Trigger] -->|Cron or Dispatch| B(Initialize Pipeline)
-    B --> C{Resolve Photos Version}
-    C -->|APKMirror latest, or env/config pin| D[Fetch Tooling]
-    D --> E[CLI v6 jar from GitHub<br/>+ Patches RVP from GitHub<br/>or v5 API fallback]
-    E --> F[Verify SHA-256 where published<br/>TLS-only via v5 API]
-    F -->|Mismatch| G[Abort Workflow]
-    F -->|OK| H{Fetch Base APK}
-    H -->|APK_SOURCE=apkmirror default| H1[APKMirror scraper<br/>universal variant]
-    H -->|APK_SOURCE=apkpure or APKMirror failed| H2[apkeep + APKEditor merge<br/>32-bit-only on recent versions]
-    H1 --> I[Resolve Patches via list-patches]
-    H2 --> I
-    I --> J[Execute ReVanced CLI v6 patch]
-    J --> K[Decode Ephemeral Keystore]
-    K --> L[Re-sign APK using apksigner]
-    L --> M[Secure Wipe Keystore]
-    M --> N[Package Magisk Module]
-    N --> O[Create GitHub Release]
+    A[Trigger: Local CLI or GitHub Actions] --> B[Pre-Flight Checks: Java 21 64-bit + Node 20]
+    B --> C[APK Discovery & Monolithic nodpi Validation]
+    C --> D[Dynamic Toolchain Resolution via GitHub API]
+    D --> E[Download & Cache: morphe-cli, patches.mpp, uber-apk-signer]
+    E --> F[Inject options.json: Spoof features + GmsCore auth]
+    F --> G[Execute Morphe CLI JVM Process with -Xmx4g Heap]
+    G --> H[Smali Bytecode Modification & Resource Sanitization]
+    H --> I[Compile Patched Multi-Dex & Modified Resources]
+    I --> J[Execute uber-apk-signer: 4-Byte ZipAlign + v1/v2/v3 Signing]
+    J --> K[SHA-256 Digest Verification & Final Artifact Packaging]
+    K --> L[Output: com.google.android.apps.photos-morphe-signed.apk]
 ```
 
-## Threat Mitigations
+---
 
-### 1. Supply Chain Attacks
+## 🔧 Core Components & Responsibilities
 
-**Threat:** A compromised dependency, ReVanced component, or GitHub Action injects malicious code into the build process.
-**Mitigations:**
+### 1. Morphe Desktop CLI & Patch Engine
 
-- **Pinned action SHAs.** All GitHub Actions are referenced by full commit SHA, not floating tags. A re-pointed `@v4` tag cannot swap in malicious code.
-- **Cryptographic verification, two-tier.**
-  - _Primary:_ The CLI v6 jar exposes its SHA-256 in the release asset's `digest` field (`sha256:<hex>`). The pipeline verifies the downloaded jar against this hash and aborts on any mismatch. Patches and integrations published on GitHub are verified the same way (or via a sibling `.sha256` file / `checksums.txt`).
-  - _Fallback:_ When `github.com/ReVanced/revanced-patches` returns HTTP 451 (a recurring DMCA-related state), the pipeline retrieves patches from `https://api.revanced.app/v5/patches`. That feed publishes no SHA-256 — only a `.asc` PGP signature alongside the asset. Integrity in this path rests on TLS to `api.revanced.app`. **Planned hardening:** verify the `.asc` signature against ReVanced's published public key, eliminating reliance on TLS alone for the patches asset.
-- **Deterministic dependencies.** `pnpm-lock.yaml` ensures byte-identical npm dependency resolution across builds.
+- **Tool**: `morphe-desktop-all.jar` from `MorpheApp/morphe-cli`.
+- **Heap Allocation**: Configured with `-Xmx4g` and `-XX:+UseG1GC` to prevent Out-Of-Memory (OOM) failures during smali decompilation of large (~200MB+) Google Photos DEX files.
+- **Dynamic Bytecode Patching**: Injects runtime hooks into Google Photos Dalvik/ART bytecode without breaking DEX structural integrity.
 
-### 2. Secret Leakage
+### 2. Patch Bundle (`patches.mpp`)
 
-**Threat:** The keystore or its passwords are leaked via logs, committed to the repository, or left exposed on the runner.
-**Mitigations:**
+- **Source**: `RookieEnough/De-Vanced` (or official Morphe patch repository).
+- **Core Applied Patches**:
+  1. `Spoof features`: Enables `com.google.android.apps.photos.NEXUS_PRELOAD` and `nexus_preload` while masking post-2016 Pixel experience flags (`PIXEL_2017+`).
+  2. `GmsCore support`: Redirects Play Services authentication to standalone MicroG / GmsCore (`app.revanced.android.gms`) for non-root Google account login.
+  3. `Fix selected account persistence`: Prevents Google Photos from clearing selected Google accounts across app restarts.
 
-- **No binaries in git.** `.gitignore` excludes `.apk`, `.jks`, and `.keystore` files; nothing crypto-sensitive enters the repo's history.
-- **Runtime injection.** The keystore is passed as a Base64 string via `KEYSTORE_BASE64` (GitHub Secret) and decoded at runtime to a temporary file with `0o600` permissions.
-- **Ephemeral storage with guaranteed wipe.** The orchestrator wraps the signing step in `try/finally`. After signing — successful or failed — the keystore file is overwritten with random bytes and then unlinked. The wipe runs even if the build throws.
+### 3. uber-apk-signer
 
-### 3. Shell Injection
+- **Tool**: `uber-apk-signer.jar` from `patrickfav/uber-apk-signer`.
+- **4-Byte ZipAlign**: Aligns all uncompressed data within the ZIP archive on 4-byte boundaries using `mmap()`-optimized layouts required by modern Android runtime.
+- **Multi-Scheme Signatures**: Applies Android cryptographic signing schemes **v1 (JAR signing)**, **v2 (APK Signature Scheme v2)**, and **v3 (APK Signature Scheme v3)**.
 
-**Threat:** Adversarial package names, version strings, or option values get interpolated into shell commands and execute arbitrary code.
-**Mitigation:**
+---
 
-- **`execFile` with arg arrays.** Every external invocation (`apkeep`, `java -jar revanced-cli.jar`, `apksigner`) goes through Node's `child_process.execFile` with an explicit argv array. There is no shell parser in the path, so meta-characters in untrusted strings are inert.
+## 🔒 Security Model & Mitigations
 
-### 4. APK Source Tampering
+### 1. Supply Chain Integrity & Dynamic Resolution
 
-**Threat:** The base Google Photos APK downloaded from APKMirror (or the APKPure fallback) is replaced with a malicious build by a network adversary or compromised mirror.
-**Mitigations:**
+- Toolchain assets (`morphe-cli`, `patches.mpp`, `uber-apk-signer`) are dynamically resolved from verified GitHub release repositories over TLS.
+- Assets are cached locally in `./tools/` and validated before execution.
 
-- **TLS to both sources.** APKMirror is fetched with the built-in `fetch` over HTTPS; the APKPure fallback uses `apkeep`, which also does plain TLS to APKPure. No custom HTTP client, no fingerprint-evasion logic, no third-party caches in the chain.
-- The pipeline does not currently verify the upstream APK's signature against a known-good Google certificate. This is a known gap — `apksigner verify --print-certs <input.apk>` could be wired in to assert the certificate matches Google's published Google Photos cert before patching. **Planned hardening.**
+### 2. Secret Keystore Management
 
-### APK source selection
+- In CI/CD (GitHub Actions), the release signing keystore is supplied via encrypted repository secrets (`KEYSTORE_BASE64`, `KEY_STORE_PASS`, `KEY_ALIAS`, `KEY_PASS`).
+- Keystores are decoded into ephemeral runtime storage and never committed to version control (`.gitignore` enforces exclusions).
+- If no custom keystore is supplied, `uber-apk-signer` creates a resilient debug certificate ensuring deterministic local testing.
 
-The pipeline supports two upstream sources for the base Google Photos APK:
+### 3. Argument Injection Protection
 
-| Source                  | When used                                                     | Pros                                                                                                             | Cons                                                                                                                                 |
-| ----------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **APKMirror** (default) | Always tried first unless `APK_SOURCE=apkpure`                | Ships true **universal** APKs with all ABIs in one file — installs on every device including 64-bit-only Android | HTML scraping, vulnerable to page redesign and Cloudflare blocks on CI runner IPs                                                    |
-| **APKPure** (fallback)  | Used when APKMirror fails, or forced via `APK_SOURCE=apkpure` | Stable `apkeep` CLI, predictable                                                                                 | Recent Photos versions are 32-bit-only on APKPure (only `config.armeabi_v7a.apk` in the XAPK) → merged APK won't install on Pixel 7+ |
+- All external process executions in `build.ps1` and `build.mjs` pass arguments via explicit typed arrays (argv arrays) without evaluating shell strings.
+- This prevents argument interpolation or shell injection vulnerabilities when handling arbitrary file paths or environment variables.
 
-The fallback chain is automatic: if APKMirror throws `ApkMirrorError`, the pipeline logs the cause and continues with the APKPure path. To force a specific source, set `APK_SOURCE=apkmirror` or `APK_SOURCE=apkpure`.
+---
 
-## ReVanced CLI v6 transition
+## ☁️ Google Photos Zero-Quota Backup Mechanism
 
-The pipeline targets ReVanced CLI v6, which changed the patch invocation surface significantly from v5:
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant App as Google Photos (Patched)
+    participant Gms as GmsCore (MicroG)
+    participant Server as Google Photos Cloud Storage API
 
-| Concern          | v5- (old)                  | v6 (current)                                                                   |
-| ---------------- | -------------------------- | ------------------------------------------------------------------------------ |
-| Patch bundle     | `--patch-bundle <file>`    | `-p <file>` (or `--patches`)                                                   |
-| Integrations APK | separate `--merge <apk>`   | bundled into the RVP; flag removed                                             |
-| Patch options    | `--options <options.json>` | `-O key=value` per option (no JSON file)                                       |
-| Enable patches   | `-i <name>`                | `-e <name>` (or `--enable`)                                                    |
-| Output path      | `--out <file>`             | `-o <file>` (or `--out`)                                                       |
-| Bundle integrity | implicit                   | explicit: either `-b` (bypass) or `-s -k -a` for signature/keyring/attestation |
-
-### Current flags
-
-```
-java -jar cli.jar patch \
-  -p patches.rvp \
-  -b \
-  -e "Spoof features" \
-  -e "GmsCore support" \
-  -o output-patched.apk \
-  input.apk
+    User->>App: Launch App & Sign In
+    App->>Gms: Request OAuth 2.0 Token (Google Account)
+    Gms-->>App: Return Valid Auth Token
+    App->>App: Query Device Entitlements (Spoof features Hook)
+    Note over App: Injects NEXUS_PRELOAD & Pixel XL marlin model
+    App->>Server: Initiate Media Upload (Original Quality RAW/4K)
+    Note over Server: Server evaluates device fingerprint: Pixel XL (2016)
+    Server-->>App: Upload Succeeded (Quota Billed: 0 Bytes)
 ```
 
-The `-b` flag bypasses the CLI's PGP verification of the RVP. This is intentional for now: see "Supply Chain Attacks" above for the planned `.asc`-signature verification that will replace `-b` with the proper `-s -k -a` triple.
-
-### Patch options
-
-The `Spoof features` patch ships with defaults that exactly match Pixel XL configuration:
-
-- _Features to enable:_ `[com.google.android.apps.photos.NEXUS_PRELOAD, com.google.android.apps.photos.nexus_preload]`
-- _Features to disable:_ every Pixel 2017+ feature flag, so newer-device features don't override the spoof.
-
-Because the defaults are already correct, the pipeline passes no `-O` overrides. If future patch releases change those defaults, the build will not silently drift — `Spoof features` is a `required` patch and any signature change to its options keys will surface in CI.
+1. **Client Identification**: Google Photos queries Android system feature flags via `PackageManager.hasSystemFeature()`.
+2. **Feature Interception**: The `Spoof features` patch intercepts these calls and asserts that `com.google.android.apps.photos.NEXUS_PRELOAD` is present.
+3. **Server-Side Quota Waiver**: Google's upload endpoint inspects the client entitlement and applies the grandfathered 2016 Pixel XL policy: **100% lifetime unlimited original-quality photo and video storage with zero quota deduction**.

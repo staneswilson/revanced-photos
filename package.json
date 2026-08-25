@@ -17,6 +17,8 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "dev:run": "pnpm run build && node --env-file=.env dist/index.js",
+    "morphe:build": "node build.mjs",
+    "morphe:clean": "node build.mjs --clean",
     "prepare": "husky install"
   },
   "dependencies": {

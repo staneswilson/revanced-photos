@@ -1,7 +1,16 @@
 node_modules/
 dist/
 workspace/
+tools/
+.cache/
+input/*.apk
+input/*.apkm
+input/*.xapk
+output/
+logs/
+temp/
 .env
 *.keystore
 *.jks
 *.b64
+*.log

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "profileVersion": 1,
+  "title": "Google Photos - Unlimited Cloud Backup (Pixel XL)",
+  "description": "1-Click configuration profile for Morphe Manager. Enables Google Pixel XL device spoofing for permanent unlimited original-quality photo & video cloud backups and integrates GmsCore microG authentication.",
+  "targetPackage": "com.google.android.apps.photos",
+  "appVersion": "*",
+  "patchSource": {
+    "name": "Morphe Patches",
+    "organization": "MorpheApp",
+    "repository": "morphe-patches",
+    "url": "https://github.com/MorpheApp/morphe-patches"
+  },
+  "patches": [
+    {
+      "name": "Spoof features",
+      "enabled": true,
+      "options": {
+        "spoofDevice": true,
+        "targetDevice": "Pixel XL",
+        "deviceModel": "Pixel XL",
+        "deviceManufacturer": "Google",
+        "deviceProduct": "marlin",
+        "deviceFingerprint": "google/marlin/marlin:10/QP1A.191005.007.A3/5972272:user/release-keys",
+        "enableUnlimitedOriginalQuality": true
+      }
+    },
+    {
+      "name": "GmsCore support",
+      "enabled": true,
+      "options": {
+        "gmscorePackageName": "app.revanced.android.gms",
+        "authType": "MicroG"
+      }
+    }
+  ],
+  "buildSettings": {
+    "stripDebug": true,
+    "experimentalSupport": true,
+    "bypassVersionCheck": true,
+    "allowAnyVersion": true,
+    "memoryOptimization": true
+  }
+}
