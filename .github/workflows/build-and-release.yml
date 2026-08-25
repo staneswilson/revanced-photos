@@ -75,7 +75,13 @@ jobs:
       - name: Fetch Google Photos APK
         run: |
           mkdir -p input
-          node -e "import('./dist/core/apkFetcher.js').then(m => m.fetchGPhotosApk('input/photos.apk')).then(res => console.log('Successfully fetched Google Photos', res.version));"
+          node -e "
+          import('./dist/core/apkFetcher.js').then(m => m.fetchGPhotosApk('input/photos.apk')).then(res => {
+            const fs = require('fs');
+            fs.writeFileSync('input/metadata.json', JSON.stringify(res, null, 2));
+            fs.writeFileSync('input/version.txt', res.version);
+            console.log('Successfully fetched Google Photos version:', res.version, 'via', res.source);
+          });"
 
       - name: Run Morphe pipeline
         env:
@@ -86,50 +92,42 @@ jobs:
           KEY_PASS: ${{ secrets.KEY_PASS }}
         run: node build.mjs --input input/photos.apk
 
-      - name: Generate Release Metadata
+      - name: Read Release Metadata
         id: meta
         run: |
           node -e "
           const fs = require('fs');
-          const apk = fs.readdirSync('input').find(f => f.endsWith('.apk'));
-          const version = apk ? apk.replace(/[^0-9.]/g, '').replace(/^\.+|\.+$/g, '') : 'latest';
-          const tag = 'v' + version + '-morphe';
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'tag=' + tag + '\n');
-          const notes = [
-            '## Google Photos Morphe Release',
-            '',
-            '* **Target Application:** Google Photos (\`com.google.android.apps.photos\`)',
-            '* **Device Spoof Target:** Google Pixel XL (\`marlin\`)',
-            '* **Patching Framework:** Morphe Desktop CLI & Morphe Patches (\`.mpp\`)',
-            '* **Signer & Alignment:** 4-Byte ZipAlign & v1/v2/v3 Cryptographic Signing (\`uber-apk-signer\`)',
-            '* **Key Features:**',
-            '  - 🌟 **Lifetime Unlimited Original-Quality Cloud Backup** (Zero Google One storage quota charge)',
-            '  - 🛡️ **MicroG / GmsCore Authentication Support** (\`app.revanced.android.gms\`)',
-            '  - ⚡ **Cold Start Account Persistence Fix**',
-            '',
-            '### Installation Guide',
-            '1. Install [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases) and sign into your Google Account.',
-            '2. Install \`com.google.android.apps.photos-morphe-signed.apk\`.',
-            '3. Set **Battery Optimization** for both GmsCore and Google Photos to **Unrestricted**.',
-            '4. Open Google Photos and confirm: **\"This Pixel can back up unlimited photos & videos at no charge.\"**'
-          ].join('\n');
-          fs.writeFileSync('release-notes.md', notes);
+          const meta = JSON.parse(fs.readFileSync('output/release-meta.json', 'utf8'));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'tag=' + meta.releaseTag + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'title=' + meta.releaseTitle + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'version=' + meta.version + '\n');
+          console.log('Release Tag   :', meta.releaseTag);
+          console.log('Release Title :', meta.releaseTitle);
+          console.log('App Version   :', meta.version);
           "
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: morphe-gphotos-${{ github.run_number }}
+          name: google-photos-${{ steps.meta.outputs.version || github.run_number }}
           path: |
-            output/com.google.android.apps.photos-morphe-signed.apk
+            output/*.apk
+            output/*.zip
             export-profile.json
+            output/release-meta.json
+            output/release-notes.md
           retention-days: 7
 
       - uses: softprops/action-gh-release@v2
         with:
+          name: ${{ steps.meta.outputs.title }}
           tag_name: ${{ steps.meta.outputs.tag }}
-          body_path: release-notes.md
+          body_path: output/release-notes.md
           files: |
+            output/GooglePhotos-v${{ steps.meta.outputs.version }}-PixelXL-unlimited.apk
             output/com.google.android.apps.photos-morphe-signed.apk
+            output/GooglePhotos-v${{ steps.meta.outputs.version }}-Magisk-module.zip
+            output/magisk-revanced-gphotos.zip
             export-profile.json
-          fail_on_unmatched_files: true
+            output/release-meta.json
+          fail_on_unmatched_files: false

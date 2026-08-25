@@ -2,15 +2,18 @@
 
 /**
  * Cross-Platform Morphe Google Photos Patching & Signing Runner.
- * Pure Node.js ESM with zero external npm dependencies.
+ * Pure Node.js ESM with executive release metadata generation.
  *
  * Target: Google Photos (com.google.android.apps.photos)
  * Features:
  *  - Dynamic GitHub Toolchain Resolution (Morphe CLI, Morphe Patches, uber-apk-signer)
  *  - Monolithic nodpi APK Validation & Split Bundle Rejection
+ *  - Automatic Version Resolution & Metadata Extraction
  *  - 4GB Multi-Dex JVM Heap Allocation (-Xmx4g)
  *  - Pixel XL Spoofing (UNLIMITED_ORIGINAL_QUALITY) + GmsCore MicroG Authentication
  *  - Automated 4-Byte Zip Alignment (zipalign) + v1/v2/v3 Cryptographic Signing
+ *  - Magisk / KernelSU Root Module Packaging (.zip)
+ *  - GitHub Release Page & release-meta.json Generation
  *  - Dual Console & File Transcript Logging
  */
 
@@ -40,8 +43,10 @@ const args = process.argv.slice(2);
 function parseArgs() {
   const options = {
     inputApk: '',
+    appVersion: '',
     clean: false,
     skipDownload: false,
+    skipMagisk: false,
     keystorePath: '',
     verbose: false,
     help: false,
@@ -52,9 +57,12 @@ function parseArgs() {
     if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--clean') options.clean = true;
     else if (arg === '--skip-download') options.skipDownload = true;
+    else if (arg === '--skip-magisk') options.skipMagisk = true;
     else if (arg === '--verbose' || arg === '-v') options.verbose = true;
     else if ((arg === '--input' || arg === '-i') && i + 1 < args.length) {
       options.inputApk = args[++i];
+    } else if ((arg === '--version' || arg === '-V') && i + 1 < args.length) {
+      options.appVersion = args[++i];
     } else if (arg === '--keystore' && i + 1 < args.length) {
       options.keystorePath = args[++i];
     } else if (!arg.startsWith('-') && !options.inputApk) {
@@ -76,8 +84,10 @@ Usage:
 
 Options:
   -i, --input <path>      Path to input monolithic (nodpi) Google Photos APK
+  -V, --version <string>  Explicit Google Photos version (e.g. 7.89.0.968035987)
   --clean                 Clean previous output, temporary files, and cache
   --skip-download         Use existing cached toolchain components without checking GitHub
+  --skip-magisk           Skip building the root Magisk/KernelSU .zip module
   --keystore <path>       Path to custom signing keystore (.jks/.keystore)
   -v, --verbose           Enable verbose output
   -h, --help              Show this help message
@@ -254,6 +264,156 @@ async function validateMonolithicApk(apkPath) {
   return stat.size;
 }
 
+// --- Version Detection ---
+async function resolveGooglePhotosVersion(targetApk, explicitVersion = '') {
+  if (explicitVersion) return explicitVersion;
+  if (process.env.GPHOTOS_VERSION) return process.env.GPHOTOS_VERSION;
+
+  // 1. Check input/metadata.json
+  try {
+    const metaPath = path.join(INPUT_DIR, 'metadata.json');
+    if (fs.existsSync(metaPath)) {
+      const meta = JSON.parse(await fsp.readFile(metaPath, 'utf8'));
+      if (meta.version && meta.version !== 'unknown') {
+        logInfo(`Resolved Photos version from input/metadata.json: ${meta.version}`);
+        return meta.version;
+      }
+    }
+  } catch {}
+
+  // 2. Check input/version.txt
+  try {
+    const vPath = path.join(INPUT_DIR, 'version.txt');
+    if (fs.existsSync(vPath)) {
+      const v = (await fsp.readFile(vPath, 'utf8')).trim();
+      if (v && v !== 'unknown' && v !== 'latest') {
+        logInfo(`Resolved Photos version from input/version.txt: ${v}`);
+        return v;
+      }
+    }
+  } catch {}
+
+  // 3. Try running aapt2 / aapt dump badging if available
+  try {
+    const res = await execPromise('aapt2', ['dump', 'badging', targetApk]);
+    const m = res.stdout.match(/versionName='([^']+)'/);
+    if (m && m[1]) {
+      logInfo(`Resolved Photos version from aapt2 badging: ${m[1]}`);
+      return m[1];
+    }
+  } catch {
+    try {
+      const res = await execPromise('aapt', ['dump', 'badging', targetApk]);
+      const m = res.stdout.match(/versionName='([^']+)'/);
+      if (m && m[1]) {
+        logInfo(`Resolved Photos version from aapt badging: ${m[1]}`);
+        return m[1];
+      }
+    } catch {}
+  }
+
+  // 4. Check filename
+  const baseName = path.basename(targetApk);
+  const nameMatch = baseName.match(/(\d+\.\d+\.\d+(?:\.\d+)?)/);
+  if (nameMatch && nameMatch[1]) {
+    logInfo(`Resolved Photos version from filename: ${nameMatch[1]}`);
+    return nameMatch[1];
+  }
+
+  // 5. Check config/versions.json
+  try {
+    const versionsJson = path.join(__dirname, 'config', 'versions.json');
+    if (fs.existsSync(versionsJson)) {
+      const v = JSON.parse(await fsp.readFile(versionsJson, 'utf8'));
+      if (v.gphotos?.version) {
+        logInfo(`Resolved Photos version from config/versions.json: ${v.gphotos.version}`);
+        return v.gphotos.version;
+      }
+    }
+  } catch {}
+
+  return '7.89.0.968035987';
+}
+
+// --- Magisk Module Packaging ---
+async function packageMagiskModule(signedApkPath, outputZipPath, version) {
+  try {
+    const { buildMagiskModule } = await import('./dist/core/magisk.js');
+    const versionCode = parseInt(version.replace(/\./g, '').slice(0, 8)) || 1;
+    await buildMagiskModule({
+      signedApkPath,
+      outputZipPath,
+      moduleId: 'revanced_gphotos',
+      moduleVersion: `${version}-morphe`,
+      moduleVersionCode: versionCode,
+    });
+    logSuccess(`Magisk module packaged successfully at: ${outputZipPath}`);
+    return true;
+  } catch (err) {
+    logWarn(`Magisk module build skipped / failed (${err.message}).`);
+    return false;
+  }
+}
+
+// --- Release Notes Generator ---
+function generateReleaseNotesMarkdown(meta) {
+  const version = meta.version;
+  const apkAsset = meta.assets.primaryApk;
+  const magiskAsset = meta.assets.magiskZip;
+  const profileAsset = meta.assets.profile;
+  const dateStr = new Date(meta.buildDate).toISOString().split('T')[0];
+
+  const lines = [
+    `## Google Photos v${version}`,
+    ``,
+    `Built ${dateStr} | Pixel XL (marlin) spoof | Unlimited original-quality backup`,
+    ``,
+    `### Toolchain`,
+    ``,
+    `| Component | Version |`,
+    `| :--- | :--- |`,
+    `| Google Photos | ${version} |`,
+    `| Morphe CLI | ${meta.toolchain.morpheCli} |`,
+    `| Morphe Patches | ${meta.toolchain.morphePatches} |`,
+    `| uber-apk-signer | ${meta.toolchain.uberSigner} |`,
+    ``,
+    `### Assets`,
+    ``,
+    `| File | Size | SHA-256 |`,
+    `| :--- | :--- | :--- |`,
+    `| \`${apkAsset.fileName}\` | ${apkAsset.sizeMb} MB | \`${apkAsset.sha256}\` |`,
+  ];
+
+  if (magiskAsset) {
+    lines.push(`| \`${magiskAsset.fileName}\` | ${magiskAsset.sizeMb} MB | \`${magiskAsset.sha256}\` |`);
+  }
+  if (profileAsset) {
+    lines.push(`| \`${profileAsset.fileName}\` | ${profileAsset.sizeKb} KB | \`${profileAsset.sha256}\` |`);
+  }
+
+  lines.push(
+    ``,
+    `### Install`,
+    ``,
+    `**Non-root:**`,
+    `1. Install [GmsCore](https://github.com/ReVanced/GmsCore/releases).`,
+    `2. Install the APK (\`adb install -r "${apkAsset.fileName}"\`).`,
+    `3. Set both Google Photos and GmsCore battery mode to Unrestricted.`,
+    ``,
+    `**Root (Magisk/KernelSU):** Flash the \`.zip\` module and reboot.`,
+    ``,
+    `### Verify`,
+    ``,
+    `Google Photos > Profile > Settings > Backup should show:`,
+    `**"This Pixel can back up unlimited photos & videos at no charge."**`,
+    ``,
+    `Upload a file, then check [one.google.com/storage](https://one.google.com/storage) — quota should not increase.`,
+  );
+
+  return lines.join('\n') + '\n';
+}
+
+
 // --- Main Pipeline ---
 async function runPipeline() {
   logHeader('Morphe Google Photos Automation Pipeline v1.0.0');
@@ -323,7 +483,6 @@ async function runPipeline() {
     const inputFiles = await fsp.readdir(INPUT_DIR);
     const apkFiles = inputFiles.filter((f) => f.toLowerCase().endsWith('.apk'));
     if (apkFiles.length > 0) {
-      // Pick newest
       apkFiles.sort(
         (a, b) =>
           fs.statSync(path.join(INPUT_DIR, b)).mtimeMs -
@@ -345,12 +504,21 @@ async function runPipeline() {
     `APK verified: Monolithic nodpi package confirmed (${(apkSize / 1024 / 1024).toFixed(2)} MB).`,
   );
 
+  // Resolve version
+  const gphotosVersion = await resolveGooglePhotosVersion(targetApk, cliOpts.appVersion);
+  logSuccess(`Target Google Photos version confirmed: v${gphotosVersion}`);
+
   // Step 3: Dynamic Toolchain Resolution
   logHeader('Step 3: Dynamic Toolchain Resolution');
 
   const githubToken = process.env.GITHUB_TOKEN || null;
+  const toolVersions = {
+    morpheCli: 'latest',
+    morphePatches: 'latest',
+    uberSigner: 'latest',
+  };
 
-  async function resolveAsset(repo, regexStr, destFileName) {
+  async function resolveAsset(repo, regexStr, destFileName, toolKey) {
     const destPath = path.join(TOOLS_DIR, destFileName);
     if (cliOpts.skipDownload && fs.existsSync(destPath)) {
       logInfo(`[${repo}] Using cached asset: ${destFileName}`);
@@ -365,6 +533,9 @@ async function runPipeline() {
         `https://api.github.com/repos/${repo}/releases/latest`,
         githubToken,
       );
+      if (release.tag_name && toolKey) {
+        toolVersions[toolKey] = release.tag_name;
+      }
       const asset = release.assets?.find((a) => regex.test(a.name));
 
       if (!asset) {
@@ -401,16 +572,19 @@ async function runPipeline() {
     config.toolchain.morpheCli.repo,
     config.toolchain.morpheCli.assetRegex,
     'morphe-cli.jar',
+    'morpheCli',
   );
   const morphePatchesMpp = await resolveAsset(
     config.toolchain.morphePatches.repo,
     config.toolchain.morphePatches.assetRegex,
     'patches.mpp',
+    'morphePatches',
   );
   const uberSignerJar = await resolveAsset(
     config.toolchain.uberApkSigner.repo,
     config.toolchain.uberApkSigner.assetRegex,
     'uber-apk-signer.jar',
+    'uberSigner',
   );
 
   // Step 4: Patching with Morphe CLI (-Xmx4g)
@@ -482,7 +656,12 @@ async function runPipeline() {
   logHeader('Step 5: Automated 4-Byte Zip Alignment & v1/v2/v3 Signing');
 
   const finalSignedApk = path.join(OUTPUT_DIR, 'com.google.android.apps.photos-morphe-signed.apk');
+  const humanNamedApk = path.join(
+    OUTPUT_DIR,
+    `GooglePhotos-v${gphotosVersion}-PixelXL-unlimited.apk`,
+  );
   if (fs.existsSync(finalSignedApk)) await fsp.unlink(finalSignedApk);
+  if (fs.existsSync(humanNamedApk)) await fsp.unlink(humanNamedApk);
 
   const signerArgs = [
     '-jar',
@@ -538,17 +717,137 @@ async function runPipeline() {
     throw new Error(`Failed to locate signed APK artifact in: ${OUTPUT_DIR}`);
   }
 
-  // Step 6: Artifact Integrity & Summary
-  logHeader('Step 6: Build Summary & Verification');
+  // Create human-friendly named copy
+  await fsp.copyFile(finalSignedApk, humanNamedApk);
+  logSuccess(`Created primary release artifact: ${path.basename(humanNamedApk)}`);
+
+  // Step 6: Magisk Root Module Generation (Optional / Standard)
+  logHeader('Step 6: Magisk & KernelSU Root Module Packaging');
+
+  let magiskZipPath = null;
+  const magiskZipFileName = `GooglePhotos-v${gphotosVersion}-Magisk-module.zip`;
+  const magiskZipDest = path.join(OUTPUT_DIR, magiskZipFileName);
+  const legacyMagiskZip = path.join(OUTPUT_DIR, 'magisk-revanced-gphotos.zip');
+
+  if (!cliOpts.skipMagisk && process.env.SKIP_MAGISK !== 'true') {
+    const built = await packageMagiskModule(finalSignedApk, magiskZipDest, gphotosVersion);
+    if (built && fs.existsSync(magiskZipDest)) {
+      magiskZipPath = magiskZipDest;
+      await fsp.copyFile(magiskZipDest, legacyMagiskZip).catch(() => {});
+    }
+  } else {
+    logInfo('Skipping Magisk module creation (--skip-magisk or SKIP_MAGISK=true).');
+  }
+
+  // Step 7: Artifact Integrity & Metadata Summary
+  logHeader('Step 7: Build Summary & Executive Release Metadata Generation');
 
   const finalStat = await fsp.stat(finalSignedApk);
   const fileData = await fsp.readFile(finalSignedApk);
   const sha256 = crypto.createHash('sha256').update(fileData).digest('hex');
   const md5 = crypto.createHash('md5').update(fileData).digest('hex');
+  const sizeMb = (finalStat.size / 1024 / 1024).toFixed(2);
+
+  // Copy export profile into output
+  const profileSrc = path.join(__dirname, 'export-profile.json');
+  const profileDest = path.join(OUTPUT_DIR, 'export-profile.json');
+  if (fs.existsSync(profileSrc)) {
+    await fsp.copyFile(profileSrc, profileDest);
+  }
+  const profileStat = fs.existsSync(profileDest) ? await fsp.stat(profileDest) : null;
+  const profileSha256 = profileStat
+    ? crypto
+        .createHash('sha256')
+        .update(await fsp.readFile(profileDest))
+        .digest('hex')
+    : '';
+
+  // Calculate Magisk stats if built
+  let magiskStat = null;
+  let magiskSha256 = null;
+  let magiskSizeMb = null;
+  if (magiskZipPath && fs.existsSync(magiskZipPath)) {
+    magiskStat = await fsp.stat(magiskZipPath);
+    magiskSha256 = crypto
+      .createHash('sha256')
+      .update(await fsp.readFile(magiskZipPath))
+      .digest('hex');
+    magiskSizeMb = (magiskStat.size / 1024 / 1024).toFixed(2);
+  }
+
+  const releaseTag = `v${gphotosVersion}`;
+  const releaseTitle = `Google Photos v${gphotosVersion} • Pixel XL Unlimited Backup`;
+  const buildIsoDate = new Date().toISOString();
+
+  const releaseMeta = {
+    appName: 'Google Photos',
+    packageName: config.targetApp.packageName,
+    version: gphotosVersion,
+    releaseTag,
+    releaseTitle,
+    buildDate: buildIsoDate,
+    spoofTarget: {
+      manufacturer: config.spoofConfig.manufacturer,
+      model: config.spoofConfig.model,
+      device: config.spoofConfig.device,
+      product: config.spoofConfig.product,
+      entitlement: config.spoofConfig.backupEntitlement,
+    },
+    toolchain: toolVersions,
+    assets: {
+      primaryApk: {
+        fileName: path.basename(humanNamedApk),
+        path: humanNamedApk,
+        sizeBytes: finalStat.size,
+        sizeMb,
+        sha256,
+        md5,
+      },
+      signedApk: {
+        fileName: path.basename(finalSignedApk),
+        path: finalSignedApk,
+        sizeBytes: finalStat.size,
+        sizeMb,
+        sha256,
+        md5,
+      },
+      magiskZip: magiskZipPath
+        ? {
+            fileName: path.basename(magiskZipPath),
+            path: magiskZipPath,
+            sizeBytes: magiskStat.size,
+            sizeMb: magiskSizeMb,
+            sha256: magiskSha256,
+          }
+        : null,
+      profile: profileStat
+        ? {
+            fileName: 'export-profile.json',
+            path: profileDest,
+            sizeBytes: profileStat.size,
+            sizeKb: (profileStat.size / 1024).toFixed(2),
+            sha256: profileSha256,
+          }
+        : null,
+    },
+  };
+
+  const metaJsonPath = path.join(OUTPUT_DIR, 'release-meta.json');
+  await fsp.writeFile(metaJsonPath, JSON.stringify(releaseMeta, null, 2), 'utf8');
+  logSuccess(`Generated release metadata: ${metaJsonPath}`);
+
+  // Generate Release Notes
+  const releaseNotesMarkdown = generateReleaseNotesMarkdown(releaseMeta);
+  const releaseNotesPath = path.join(OUTPUT_DIR, 'release-notes.md');
+  await fsp.writeFile(releaseNotesPath, releaseNotesMarkdown, 'utf8');
+  await fsp.writeFile(path.join(__dirname, 'release-notes.md'), releaseNotesMarkdown, 'utf8');
+  logSuccess(`Generated rich release notes: ${releaseNotesPath}`);
 
   logSuccess('BUILD SUCCEEDED!');
-  logInfo(`Final Artifact : ${finalSignedApk}`);
-  logInfo(`File Size      : ${(finalStat.size / 1024 / 1024).toFixed(2)} MB`);
+  logInfo(`Release Tag    : ${releaseTag}`);
+  logInfo(`Release Title  : ${releaseTitle}`);
+  logInfo(`Primary APK    : ${humanNamedApk}`);
+  logInfo(`File Size      : ${sizeMb} MB`);
   logInfo(`SHA-256 Digest : ${sha256}`);
   logInfo(`MD5 Digest     : ${md5}`);
 
@@ -560,7 +859,7 @@ async function runPipeline() {
    https://github.com/ReVanced/GmsCore/releases
 
 2. Sideload the signed APK to your Android device via ADB:
-   \x1b[33madb install -r "${finalSignedApk}"\x1b[36m
+   \x1b[33madb install -r "${humanNamedApk}"\x1b[36m
 
 3. Whitelist Google Photos & GmsCore in Battery Optimization (Set to 'Unrestricted').
 

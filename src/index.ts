@@ -45,35 +45,40 @@ async function writeReleaseMeta(data: any): Promise<void> {
   await fs.writeFile(metaPath, JSON.stringify(data.meta, null, 2));
 
   const notesPath = CONFIG.paths.releaseNotes;
-  let notes = `## Google Photos ReVanced \n\n`;
-  notes += `* **Google Photos Version:** ${data.meta.gphotosVersion} (via ${data.source})\n`;
-  notes += `* **ReVanced CLI:** ${data.meta.revancedCliVersion}\n`;
-  notes += `* **ReVanced Patches:** ${data.meta.revancedPatchesVersion}\n`;
-  notes += `* **ReVanced Integrations:** ${data.meta.revancedIntegrationsVersion}\n\n`;
+  const lines: string[] = [
+    `## Google Photos ReVanced — ${data.meta.gphotosVersion}`,
+    ``,
+    `| Component | Version |`,
+    `| :--- | :--- |`,
+    `| Google Photos | ${data.meta.gphotosVersion} (${data.source}) |`,
+    `| ReVanced CLI | ${data.meta.revancedCliVersion} |`,
+    `| ReVanced Patches | ${data.meta.revancedPatchesVersion} |`,
+    `| ReVanced Integrations | ${data.meta.revancedIntegrationsVersion} |`,
+    `| Spoof Target | ${CONFIG.spoofTarget.model} (${CONFIG.spoofTarget.product}) |`,
+    ``,
+    `### Applied Patches`,
+    ``,
+    ...data.meta.appliedPatches.map((p: string) => `- \`${p}\``),
+    ``,
+    `### SHA-256`,
+    ``,
+    `- Signed APK: \`${data.meta.signedApkSha256}\``,
+  ];
 
-  notes += `### Applied Patches\n`;
-  for (const p of data.meta.appliedPatches) {
-    notes += `- \`${p}\`\n`;
-  }
-  notes += `\n### Device Spoof Target\n`;
-  notes += `* **Model:** ${CONFIG.spoofTarget.model} (${CONFIG.spoofTarget.product})\n\n`;
-
-  notes += `### Hashes (SHA-256)\n`;
-  notes += `- **Signed APK:** \`${data.meta.signedApkSha256}\`\n`;
   if (data.meta.magiskZipSha256) {
-    notes += `- **Magisk Zip:** \`${data.meta.magiskZipSha256}\`\n`;
+    lines.push(`- Magisk module: \`${data.meta.magiskZipSha256}\``);
   }
 
-  notes += `\n### Installation\n`;
-  notes += `#### Non-Root (Standard)\n`;
-  notes += `1. Install [MicroG / GmsCore](https://github.com/ReVanced/GmsCore/releases) first.\n`;
-  notes += `2. Install the provided \`.apk\` file.\n\n`;
+  lines.push(
+    ``,
+    `### Install`,
+    ``,
+    `**Non-root:** Install [GmsCore](https://github.com/ReVanced/GmsCore/releases), then install the APK.`,
+    ``,
+    `**Root (Magisk/KernelSU):** Flash the \`.zip\` module and reboot.`,
+  );
 
-  notes += `#### Root (Magisk/KernelSU)\n`;
-  notes += `1. Flash the provided \`.zip\` module in Magisk/KernelSU.\n`;
-  notes += `2. Reboot. Google Photos will be replaced at the system level.\n`;
-
-  await fs.writeFile(notesPath, notes);
+  await fs.writeFile(notesPath, lines.join('\n') + '\n');
 }
 
 async function main() {
